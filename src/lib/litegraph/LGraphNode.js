@@ -1056,6 +1056,21 @@ class LGraphNode {
     }
   }
 
+  // Alias for backward compatibility (original used singular form)
+  clearTriggeredSlot() {
+    this.clearTriggeredSlots();
+  }
+
+  /**
+   * Execute an action on this node (immediate, bypasses deferred queue).
+   * Similar to actionDo but executes immediately regardless of use_deferred_actions.
+   */
+  executeAction(actionName, data) {
+    if (this.onAction) {
+      this.onAction(actionName, data);
+    }
+  }
+
   // ===================== MISC =====================
 
   addConnection(name, type, direction) {

@@ -1,0 +1,1874 @@
+  5560→
+  5561→        return options;
+  5562→    }
+  5563→
+  5564→    getGroupMenuOptions(node) {
+  5565→        return [
+  5566→            { content: "Title", callback: LGraphCanvas.onShowPropertyEditor },
+  5567→            {
+  5568→                content: "Color",
+  5569→                has_submenu: true,
+  5570→                callback: LGraphCanvas.onMenuNodeColors,
+  5571→            },
+  5572→            {
+  5573→                content: "Font size",
+  5574→                property: "font_size",
+  5575→                type: "Number",
+  5576→                callback: LGraphCanvas.onShowPropertyEditor,
+  5577→            },
+  5578→            null,
+  5579→            { content: "Remove", callback: LGraphCanvas.onMenuNodeRemove },
+  5580→        ];
+  5581→    }
+  5582→
+  5583→    // ==================== STATIC MENU METHODS ====================
+  5584→
+  5585→    static onMenuAdd(node, options, e, prev_menu, callback) {
+  5586→        const canvas = LGraphCanvas.active_canvas;
+  5587→        const ref_window = canvas.getCanvasWindow();
+  5588→        const graph = canvas.graph;
+  5589→        if (!graph) return;
+  5590→
+  5591→        function inner_onMenuAdded(base_category, prev_menu) {
+  5592→            const categories = LiteGraph.getNodeTypesCategories(
+  5593→                canvas.filter || graph.filter
+  5594→            ).filter((category) => category.startsWith(base_category));
+  5595→            const entries = [];
+  5596→
+  5597→            categories.map((category) => {
+  5598→                if (!category) return;
+  5599→
+  5600→                const base_category_regex = new RegExp(
+  5601→                    "^(" + base_category + ")"
+  5602→                );
+  5603→                const category_name = category
+  5604→                    .replace(base_category_regex, "")
+  5605→                    .split("/")[0];
+  5606→                const category_path =
+  5607→                    base_category === ""
+  5608→                        ? category_name + "/"
+  5609→                        : base_category + category_name + "/";
+  5610→
+  5611→                let name = category_name;
+  5612→                if (name.indexOf("::") !== -1)
+  5613→                    name = name.split("::")[1];
+  5614→
+  5615→                const index = entries.findIndex(
+  5616→                    (entry) => entry.value === category_path
+  5617→                );
+  5618→                if (index === -1) {
+  5619→                    entries.push({
+  5620→                        value: category_path,
+  5621→                        content: name,
+  5622→                        has_submenu: true,
+  5623→                        callback: (value, event, mouseEvent, contextMenu) => {
+  5624→                            inner_onMenuAdded(value.value, contextMenu);
+  5625→                        },
+  5626→                    });
+  5627→                }
+  5628→            });
+  5629→
+  5630→            const nodes = LiteGraph.getNodeTypesInCategory(
+  5631→                base_category.slice(0, -1),
+  5632→                canvas.filter || graph.filter
+  5633→            );
+  5634→            nodes.map((node) => {
+  5635→                if (node.skip_list) return;
+  5636→
+  5637→                const entry = {
+  5638→                    value: node.type,
+  5639→                    content: node.title,
+  5640→                    has_submenu: false,
+  5641→                    callback: (value, event, mouseEvent, contextMenu) => {
+  5642→                        const first_event = contextMenu.getFirstEvent();
+  5643→                        canvas.graph.beforeChange();
+  5644→                        const newNode = LiteGraph.createNode(value.value);
+  5645→                        if (newNode) {
+  5646→                            newNode.pos = canvas.convertEventToCanvasOffset(first_event);
+  5647→                            canvas.graph.add(newNode);
+  5648→                        }
+  5649→                        if (callback) callback(newNode);
+  5650→                        canvas.graph.afterChange();
+  5651→                    },
+  5652→                };
+  5653→
+  5654→                entries.push(entry);
+  5655→            });
+  5656→
+  5657→            new ContextMenu(entries, { event: e, parentMenu: prev_menu }, ref_window);
+  5658→        }
+  5659→
+  5660→        inner_onMenuAdded("", prev_menu);
+  5661→        return false;
+  5662→    }
+  5663→
+  5664→    static onMenuNodeRemove(value, options, e, menu, node) {
+  5665→        if (!node) throw "no node passed";
+  5666→
+  5667→        const graph = node.graph;
+  5668→        graph.beforeChange();
+  5669→
+  5670→        const fApplyMultiNode = (n) => {
+  5671→            if (n.removable === false) return;
+  5672→            graph.remove(n);
+  5673→        };
+  5674→
+  5675→        const graphcanvas = LGraphCanvas.active_canvas;
+  5676→        if (
+  5677→            !graphcanvas.selected_nodes ||
+  5678→            Object.keys(graphcanvas.selected_nodes).length <= 1
+  5679→        ) {
+  5680→            fApplyMultiNode(node);
+  5681→        } else {
+  5682→            for (const i in graphcanvas.selected_nodes) {
+  5683→                fApplyMultiNode(graphcanvas.selected_nodes[i]);
+  5684→            }
+  5685→        }
+  5686→
+  5687→        graph.afterChange();
+  5688→        node.setDirtyCanvas(true, true);
+  5689→    }
+  5690→
+  5691→    static onMenuNodeClone(value, options, e, menu, node) {
+  5692→        node.graph.beforeChange();
+  5693→
+  5694→        const newSelected = {};
+  5695→
+  5696→        const fApplyMultiNode = (n) => {
+  5697→            if (n.clonable === false) return;
+  5698→            const newnode = n.clone();
+  5699→            if (!newnode) return;
+  5700→            newnode.pos = [n.pos[0] + 5, n.pos[1] + 5];
+  5701→            n.graph.add(newnode);
+  5702→            newSelected[newnode.id] = newnode;
+  5703→        };
+  5704→
+  5705→        const graphcanvas = LGraphCanvas.active_canvas;
+  5706→        if (
+  5707→            !graphcanvas.selected_nodes ||
+  5708→            Object.keys(graphcanvas.selected_nodes).length <= 1
+  5709→        ) {
+  5710→            fApplyMultiNode(node);
+  5711→        } else {
+  5712→            for (const i in graphcanvas.selected_nodes) {
+  5713→                fApplyMultiNode(graphcanvas.selected_nodes[i]);
+  5714→            }
+  5715→        }
+  5716→
+  5717→        if (Object.keys(newSelected).length) {
+  5718→            graphcanvas.selectNodes(newSelected);
+  5719→        }
+  5720→
+  5721→        node.graph.afterChange();
+  5722→        node.setDirtyCanvas(true, true);
+  5723→    }
+  5724→
+  5725→    static onMenuNodeCollapse(value, options, e, menu, node) {
+  5726→        node.graph.beforeChange();
+  5727→
+  5728→        const fApplyMultiNode = (n) => {
+  5729→            n.collapse();
+  5730→        };
+  5731→
+  5732→        const graphcanvas = LGraphCanvas.active_canvas;
+  5733→        if (
+  5734→            !graphcanvas.selected_nodes ||
+  5735→            Object.keys(graphcanvas.selected_nodes).length <= 1
+  5736→        ) {
+  5737→            fApplyMultiNode(node);
+  5738→        } else {
+  5739→            for (const i in graphcanvas.selected_nodes) {
+  5740→                fApplyMultiNode(graphcanvas.selected_nodes[i]);
+  5741→            }
+  5742→        }
+  5743→
+  5744→        node.graph.afterChange();
+  5745→    }
+  5746→
+  5747→    static onMenuNodeMode(value, options, e, menu, node) {
+  5748→        new ContextMenu(LiteGraph.NODE_MODES, {
+  5749→            event: e,
+  5750→            callback: inner_clicked,
+  5751→            parentMenu: menu,
+  5752→            node: node,
+  5753→        });
+  5754→
+  5755→        function inner_clicked(v) {
+  5756→            if (!node) return;
+  5757→            const kV = Object.values(LiteGraph.NODE_MODES).indexOf(v);
+  5758→            const fApplyMultiNode = (n) => {
+  5759→                if (kV >= 0 && LiteGraph.NODE_MODES[kV]) n.changeMode(kV);
+  5760→                else {
+  5761→                    console.warn("unexpected mode: " + v);
+  5762→                    n.changeMode(LiteGraph.ALWAYS);
+  5763→                }
+  5764→            };
+  5765→
+  5766→            const graphcanvas = LGraphCanvas.active_canvas;
+  5767→            if (
+  5768→                !graphcanvas.selected_nodes ||
+  5769→                Object.keys(graphcanvas.selected_nodes).length <= 1
+  5770→            ) {
+  5771→                fApplyMultiNode(node);
+  5772→            } else {
+  5773→                for (const i in graphcanvas.selected_nodes) {
+  5774→                    fApplyMultiNode(graphcanvas.selected_nodes[i]);
+  5775→                }
+  5776→            }
+  5777→        }
+  5778→
+  5779→        return false;
+  5780→    }
+  5781→
+  5782→    static onMenuNodeColors(value, options, e, menu, node) {
+  5783→        if (!node) throw "no node for color";
+  5784→
+  5785→        const values = [];
+  5786→        values.push({
+  5787→            value: null,
+  5788→            content: "<span style='display: block; padding-left: 4px;'>No color</span>",
+  5789→        });
+  5790→
+  5791→        for (const i in LGraphCanvas.node_colors) {
+  5792→            const color = LGraphCanvas.node_colors[i];
+  5793→            values.push({
+  5794→                value: i,
+  5795→                content:
+  5796→                    "<span style='display: block; color: #999; padding-left: 4px; border-left: 8px solid " +
+  5797→                    color.color +
+  5798→                    "; background-color:" +
+  5799→                    color.bgcolor +
+  5800→                    "'>" +
+  5801→                    i +
+  5802→                    "</span>",
+  5803→            });
+  5804→        }
+  5805→        new ContextMenu(values, {
+  5806→            event: e,
+  5807→            callback: inner_clicked,
+  5808→            parentMenu: menu,
+  5809→            node: node,
+  5810→        });
+  5811→
+  5812→        function inner_clicked(v) {
+  5813→            if (!node) return;
+  5814→
+  5815→            const color = v.value ? LGraphCanvas.node_colors[v.value] : null;
+  5816→
+  5817→            const fApplyColor = (n) => {
+  5818→                if (color) {
+  5819→                    if (n.constructor === LGraphGroup) {
+  5820→                        n.color = color.groupcolor;
+  5821→                    } else {
+  5822→                        n.color = color.color;
+  5823→                        n.bgcolor = color.bgcolor;
+  5824→                    }
+  5825→                } else {
+  5826→                    delete n.color;
+  5827→                    delete n.bgcolor;
+  5828→                }
+  5829→            };
+  5830→
+  5831→            const graphcanvas = LGraphCanvas.active_canvas;
+  5832→            if (
+  5833→                !graphcanvas.selected_nodes ||
+  5834→                Object.keys(graphcanvas.selected_nodes).length <= 1
+  5835→            ) {
+  5836→                fApplyColor(node);
+  5837→            } else {
+  5838→                for (const i in graphcanvas.selected_nodes) {
+  5839→                    fApplyColor(graphcanvas.selected_nodes[i]);
+  5840→                }
+  5841→            }
+  5842→            node.setDirtyCanvas(true, true);
+  5843→        }
+  5844→
+  5845→        return false;
+  5846→    }
+  5847→
+  5848→    static onMenuNodeShapes(value, options, e, menu, node) {
+  5849→        if (!node) throw "no node passed";
+  5850→
+  5851→        new ContextMenu(LiteGraph.VALID_SHAPES, {
+  5852→            event: e,
+  5853→            callback: inner_clicked,
+  5854→            parentMenu: menu,
+  5855→            node: node,
+  5856→        });
+  5857→
+  5858→        function inner_clicked(v) {
+  5859→            if (!node) return;
+  5860→            node.graph.beforeChange();
+  5861→
+  5862→            const fApplyMultiNode = (n) => {
+  5863→                n.shape = v;
+  5864→            };
+  5865→
+  5866→            const graphcanvas = LGraphCanvas.active_canvas;
+  5867→            if (
+  5868→                !graphcanvas.selected_nodes ||
+  5869→                Object.keys(graphcanvas.selected_nodes).length <= 1
+  5870→            ) {
+  5871→                fApplyMultiNode(node);
+  5872→            } else {
+  5873→                for (const i in graphcanvas.selected_nodes) {
+  5874→                    fApplyMultiNode(graphcanvas.selected_nodes[i]);
+  5875→                }
+  5876→            }
+  5877→
+  5878→            node.graph.afterChange();
+  5879→            node.setDirtyCanvas(true);
+  5880→        }
+  5881→
+  5882→        return false;
+  5883→    }
+  5884→
+  5885→    static onMenuNodePin(value, options, e, menu, node) {
+  5886→        node.pin();
+  5887→    }
+  5888→
+  5889→    static onGroupAdd(info, entry, mouseEvent) {
+  5890→        const canvas = LGraphCanvas.active_canvas;
+  5891→        const ref_window = canvas.getCanvasWindow();
+  5892→        const group = new LGraphGroup();
+  5893→        group.pos = canvas.convertEventToCanvasOffset(mouseEvent);
+  5894→        canvas.graph.add(group);
+  5895→    }
+  5896→
+  5897→    // ---------------------------------------------------------------------------
+  5898→    // resize
+  5899→    // ---------------------------------------------------------------------------
+  5900→
+  5901→    /**
+  5902→     * resizes the canvas to a given size, if no size is passed, then it tries to fill the parentNode
+  5903→     * @method resize
+  5904→     **/
+  5905→    resize(width, height) {
+  5906→        if (!width && !height) {
+  5907→            const parent = this.canvas.parentNode;
+  5908→            width = parent.offsetWidth;
+  5909→            height = parent.offsetHeight;
+  5910→        }
+  5911→
+  5912→        if (this.canvas.width == width && this.canvas.height == height) {
+  5913→            return;
+  5914→        }
+  5915→
+  5916→        this.canvas.width = width;
+  5917→        this.canvas.height = height;
+  5918→        this.bgcanvas.width = this.canvas.width;
+  5919→        this.bgcanvas.height = this.canvas.height;
+  5920→        this.setDirty(true, true);
+  5921→    }
+  5922→
+  5923→    // ---------------------------------------------------------------------------
+  5924→    // Static menu methods
+  5925→    // ---------------------------------------------------------------------------
+  5926→
+  5927→    static showMenuNodeOptionalInputs(v, options, e, prev_menu, node) {
+  5928→        if (!node) {
+  5929→            return;
+  5930→        }
+  5931→
+  5932→        const canvas = LGraphCanvas.active_canvas;
+  5933→        const ref_window = canvas.getCanvasWindow();
+  5934→
+  5935→        let opts = node.optional_inputs;
+  5936→        if (node.onGetInputs) {
+  5937→            opts = node.onGetInputs();
+  5938→        }
+  5939→
+  5940→        const entries = [];
+  5941→        if (opts) {
+  5942→            for (let i = 0; i < opts.length; i++) {
+  5943→                const entry = opts[i];
+  5944→                if (!entry) {
+  5945→                    entries.push(null);
+  5946→                    continue;
+  5947→                }
+  5948→                let label = entry[0];
+  5949→                if (!entry[2]) entry[2] = {};
+  5950→
+  5951→                if (entry[2].label) {
+  5952→                    label = entry[2].label;
+  5953→                }
+  5954→
+  5955→                entry[2].removable = true;
+  5956→                const data = { content: label, value: entry };
+  5957→                if (entry[1] == LiteGraph.ACTION) {
+  5958→                    data.className = "event";
+  5959→                }
+  5960→                entries.push(data);
+  5961→            }
+  5962→        }
+  5963→
+  5964→        if (node.onMenuNodeInputs) {
+  5965→            const retEntries = node.onMenuNodeInputs(entries);
+  5966→            if (retEntries) { entries.length = 0; entries.push(...retEntries); }
+  5967→        }
+  5968→
+  5969→        if (!entries.length) {
+  5970→            console.log("no input entries");
+  5971→            return;
+  5972→        }
+  5973→
+  5974→        const menu = new ContextMenu(
+  5975→            entries,
+  5976→            {
+  5977→                event: e,
+  5978→                callback: inner_clicked,
+  5979→                parentMenu: prev_menu,
+  5980→                node: node
+  5981→            },
+  5982→            ref_window
+  5983→        );
+  5984→
+  5985→        function inner_clicked(v, e, prev) {
+  5986→            if (!node) {
+  5987→                return;
+  5988→            }
+  5989→
+  5990→            if (v.callback) {
+  5991→                v.callback.call(LGraphCanvas, node, v, e, prev);
+  5992→            }
+  5993→
+  5994→            if (v.value) {
+  5995→                node.graph.beforeChange();
+  5996→                node.addInput(v.value[0], v.value[1], v.value[2]);
+  5997→
+  5998→                if (node.onNodeInputAdd) { // callback to the node when adding a slot
+  5999→                    node.onNodeInputAdd(v.value);
+  6000→                }
+  6001→                node.setDirtyCanvas(true, true);
+  6002→                node.graph.afterChange();
+  6003→            }
+  6004→        }
+  6005→
+  6006→        return false;
+  6007→    }
+  6008→
+  6009→    static showMenuNodeOptionalOutputs(v, options, e, prev_menu, node) {
+  6010→        if (!node) {
+  6011→            return;
+  6012→        }
+  6013→
+  6014→        const canvas = LGraphCanvas.active_canvas;
+  6015→        const ref_window = canvas.getCanvasWindow();
+  6016→
+  6017→        let opts = node.optional_outputs;
+  6018→        if (node.onGetOutputs) {
+  6019→            opts = node.onGetOutputs();
+  6020→        }
+  6021→
+  6022→        let entries = [];
+  6023→        if (opts) {
+  6024→            for (let i = 0; i < opts.length; i++) {
+  6025→                const entry = opts[i];
+  6026→                if (!entry) {
+  6027→                    //separator?
+  6028→                    entries.push(null);
+  6029→                    continue;
+  6030→                }
+  6031→
+  6032→                if (
+  6033→                    node.flags &&
+  6034→                    node.flags.skip_repeated_outputs &&
+  6035→                    node.findOutputSlot(entry[0]) != -1
+  6036→                ) {
+  6037→                    continue;
+  6038→                } //skip the ones already on
+  6039→                let label = entry[0];
+  6040→                if (!entry[2]) entry[2] = {};
+  6041→                if (entry[2].label) {
+  6042→                    label = entry[2].label;
+  6043→                }
+  6044→                entry[2].removable = true;
+  6045→                const data = { content: label, value: entry };
+  6046→                if (entry[1] == LiteGraph.EVENT) {
+  6047→                    data.className = "event";
+  6048→                }
+  6049→                entries.push(data);
+  6050→            }
+  6051→        }
+  6052→
+  6053→        if (this.onMenuNodeOutputs) {
+  6054→            entries = this.onMenuNodeOutputs(entries);
+  6055→        }
+  6056→        if (LiteGraph.do_add_triggers_slots) { //canvas.allow_addOutSlot_onExecuted
+  6057→            if (node.findOutputSlot("onExecuted") == -1) {
+  6058→                entries.push({ content: "On Executed", value: ["onExecuted", LiteGraph.EVENT, { nameLocked: true }], className: "event" }); //, opts: {}
+  6059→            }
+  6060→        }
+  6061→        // add callback for modifing the menu elements onMenuNodeOutputs
+  6062→        if (node.onMenuNodeOutputs) {
+  6063→            const retEntries = node.onMenuNodeOutputs(entries);
+  6064→            if (retEntries) { entries.length = 0; entries.push(...retEntries); }
+  6065→        }
+  6066→
+  6067→        if (!entries.length) {
+  6068→            return;
+  6069→        }
+  6070→
+  6071→        const menu = new ContextMenu(
+  6072→            entries,
+  6073→            {
+  6074→                event: e,
+  6075→                callback: inner_clicked,
+  6076→                parentMenu: prev_menu,
+  6077→                node: node
+  6078→            },
+  6079→            ref_window
+  6080→        );
+  6081→
+  6082→        function inner_clicked(v, e, prev) {
+  6083→            if (!node) {
+  6084→                return;
+  6085→            }
+  6086→
+  6087→            if (v.callback) {
+  6088→                v.callback.call(LGraphCanvas, node, v, e, prev);
+  6089→            }
+  6090→
+  6091→            if (!v.value) {
+  6092→                return;
+  6093→            }
+  6094→
+  6095→            const value = v.value[1];
+  6096→
+  6097→            if (
+  6098→                value &&
+  6099→                (value.constructor === Object || value.constructor === Array)
+  6100→            ) {
+  6101→                //submenu why?
+  6102→                const subEntries = [];
+  6103→                for (const i in value) {
+  6104→                    subEntries.push({ content: i, value: value[i] });
+  6105→                }
+  6106→                new ContextMenu(subEntries, {
+  6107→                    event: e,
+  6108→                    callback: inner_clicked,
+  6109→                    parentMenu: prev_menu,
+  6110→                    node: node
+  6111→                });
+  6112→                return false;
+  6113→            } else {
+  6114→                node.graph.beforeChange();
+  6115→                node.addOutput(v.value[0], v.value[1], v.value[2]);
+  6116→
+  6117→                if (node.onNodeOutputAdd) { // a callback to the node when adding a slot
+  6118→                    node.onNodeOutputAdd(v.value);
+  6119→                }
+  6120→                node.setDirtyCanvas(true, true);
+  6121→                node.graph.afterChange();
+  6122→            }
+  6123→        }
+  6124→
+  6125→        return false;
+  6126→    }
+  6127→
+  6128→    static onShowMenuNodeProperties(value, options, e, prev_menu, node) {
+  6129→        if (!node || !node.properties) {
+  6130→            return;
+  6131→        }
+  6132→
+  6133→        const canvas = LGraphCanvas.active_canvas;
+  6134→        const ref_window = canvas.getCanvasWindow();
+  6135→
+  6136→        const entries = [];
+  6137→        for (const i in node.properties) {
+  6138→            let propValue = node.properties[i] !== undefined ? node.properties[i] : " ";
+  6139→            if (typeof propValue == "object")
+  6140→                propValue = JSON.stringify(propValue);
+  6141→            const info = node.getPropertyInfo(i);
+  6142→            if (info.type == "enum" || info.type == "combo")
+  6143→                propValue = LGraphCanvas.getPropertyPrintableValue(propValue, info.values);
+  6144→
+  6145→            //value could contain invalid html characters, clean that
+  6146→            propValue = LGraphCanvas.decodeHTML(propValue);
+  6147→            entries.push({
+  6148→                content:
+  6149→                    "<span class='property_name'>" +
+  6150→                    (info.label ? info.label : i) +
+  6151→                    "</span>" +
+  6152→                    "<span class='property_value'>" +
+  6153→                    propValue +
+  6154→                    "</span>",
+  6155→                value: i
+  6156→            });
+  6157→        }
+  6158→        if (!entries.length) {
+  6159→            return;
+  6160→        }
+  6161→
+  6162→        const menu = new ContextMenu(
+  6163→            entries,
+  6164→            {
+  6165→                event: e,
+  6166→                callback: inner_clicked,
+  6167→                parentMenu: prev_menu,
+  6168→                allow_html: true,
+  6169→                node: node
+  6170→            },
+  6171→            ref_window
+  6172→        );
+  6173→
+  6174→        function inner_clicked(v, options, e, prev) {
+  6175→            if (!node) {
+  6176→                return;
+  6177→            }
+  6178→            const rect = this.getBoundingClientRect();
+  6179→            canvas.showEditPropertyValue(node, v.value, {
+  6180→                position: [rect.left, rect.top]
+  6181→            });
+  6182→        }
+  6183→
+  6184→        return false;
+  6185→    }
+  6186→
+  6187→    static onShowPropertyEditor(item, options, e, menu, node) {
+  6188→        const property = item.property || "title";
+  6189→        let value = node[property];
+  6190→
+  6191→        // TODO refactor :: use createDialog ?
+  6192→
+  6193→        const dialog = document.createElement("div");
+  6194→        dialog.is_modified = false;
+  6195→        dialog.className = "graphdialog";
+  6196→        dialog.innerHTML =
+  6197→            "<span class='name'></span><input autofocus type='text' class='value'/><button>OK</button>";
+  6198→        dialog.close = function () {
+  6199→            if (dialog.parentNode) {
+  6200→                dialog.parentNode.removeChild(dialog);
+  6201→            }
+  6202→        };
+  6203→        const title = dialog.querySelector(".name");
+  6204→        title.innerText = property;
+  6205→        const input = dialog.querySelector(".value");
+  6206→        if (input) {
+  6207→            input.value = value;
+  6208→            input.addEventListener("blur", function (e) {
+  6209→                this.focus();
+  6210→            });
+  6211→            input.addEventListener("keydown", function (e) {
+  6212→                dialog.is_modified = true;
+  6213→                if (e.keyCode == 27) {
+  6214→                    //ESC
+  6215→                    dialog.close();
+  6216→                } else if (e.keyCode == 13) {
+  6217→                    inner(); // save
+  6218→                } else if (e.keyCode != 13 && e.target.localName != "textarea") {
+  6219→                    return;
+  6220→                }
+  6221→                e.preventDefault();
+  6222→                e.stopPropagation();
+  6223→            });
+  6224→        }
+  6225→
+  6226→        const graphcanvas = LGraphCanvas.active_canvas;
+  6227→        const canvas = graphcanvas.canvas;
+  6228→
+  6229→        const rect = canvas.getBoundingClientRect();
+  6230→        let offsetx = -20;
+  6231→        let offsety = -20;
+  6232→        if (rect) {
+  6233→            offsetx -= rect.left;
+  6234→            offsety -= rect.top;
+  6235→        }
+  6236→
+  6237→        if (event) {
+  6238→            dialog.style.left = event.clientX + offsetx + "px";
+  6239→            dialog.style.top = event.clientY + offsety + "px";
+  6240→        } else {
+  6241→            dialog.style.left = canvas.width * 0.5 + offsetx + "px";
+  6242→            dialog.style.top = canvas.height * 0.5 + offsety + "px";
+  6243→        }
+  6244→
+  6245→        const button = dialog.querySelector("button");
+  6246→        button.addEventListener("click", inner);
+  6247→        canvas.parentNode.appendChild(dialog);
+  6248→
+  6249→        if (input) input.focus();
+  6250→
+  6251→        let dialogCloseTimer = null;
+  6252→        dialog.addEventListener("mouseleave", function (e) {
+  6253→            if (LiteGraph.dialog_close_on_mouse_leave)
+  6254→                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+  6255→                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+  6256→        });
+  6257→        dialog.addEventListener("mouseenter", function (e) {
+  6258→            if (LiteGraph.dialog_close_on_mouse_leave)
+  6259→                if (dialogCloseTimer) clearTimeout(dialogCloseTimer);
+  6260→        });
+  6261→
+  6262→        function inner() {
+  6263→            if (input) setValue(input.value);
+  6264→        }
+  6265→
+  6266→        function setValue(value) {
+  6267→            if (item.type == "Number") {
+  6268→                value = Number(value);
+  6269→            } else if (item.type == "Boolean") {
+  6270→                value = Boolean(value);
+  6271→            }
+  6272→            node[property] = value;
+  6273→            if (dialog.parentNode) {
+  6274→                dialog.parentNode.removeChild(dialog);
+  6275→            }
+  6276→            node.setDirtyCanvas(true, true);
+  6277→        }
+  6278→    }
+  6279→
+  6280→    static onMenuResizeNode(value, options, e, menu, node) {
+  6281→        if (!node) {
+  6282→            return;
+  6283→        }
+  6284→
+  6285→        const fApplyMultiNode = function (node) {
+  6286→            node.size = node.computeSize();
+  6287→            if (node.onResize)
+  6288→                node.onResize(node.size);
+  6289→        };
+  6290→
+  6291→        const graphcanvas = LGraphCanvas.active_canvas;
+  6292→        if (!graphcanvas.selected_nodes || Object.keys(graphcanvas.selected_nodes).length <= 1) {
+  6293→            fApplyMultiNode(node);
+  6294→        } else {
+  6295→            for (const i in graphcanvas.selected_nodes) {
+  6296→                fApplyMultiNode(graphcanvas.selected_nodes[i]);
+  6297→            }
+  6298→        }
+  6299→
+  6300→        node.setDirtyCanvas(true, true);
+  6301→    }
+  6302→
+  6303→    static getPropertyPrintableValue(value, values) {
+  6304→        if (!values)
+  6305→            return String(value);
+  6306→
+  6307→        if (values.constructor === Array) {
+  6308→            return String(value);
+  6309→        }
+  6310→
+  6311→        if (values.constructor === Object) {
+  6312→            let desc_value = "";
+  6313→            for (const k in values) {
+  6314→                if (values[k] != value)
+  6315→                    continue;
+  6316→                desc_value = k;
+  6317→                break;
+  6318→            }
+  6319→            return String(value) + " (" + desc_value + ")";
+  6320→        }
+  6321→    }
+  6322→
+  6323→    static decodeHTML(str) {
+  6324→        const e = document.createElement("div");
+  6325→        e.innerText = str;
+  6326→        return e.innerHTML;
+  6327→    }
+  6328→
+  6329→    // ---------------------------------------------------------------------------
+  6330→    // Instance menu / dialog methods
+  6331→    // ---------------------------------------------------------------------------
+  6332→
+  6333→    showLinkMenu(link, event) {
+  6334→        const node_left = this.graph.getNodeById(link.origin_id);
+  6335→        const node_right = this.graph.getNodeById(link.target_id);
+  6336→        let fromType = false;
+  6337→        if (node_left && node_left.outputs && node_left.outputs[link.origin_slot]) fromType = node_left.outputs[link.origin_slot].type;
+  6338→        let destType = false;
+  6339→        if (node_right && node_right.outputs && node_right.outputs[link.target_slot]) destType = node_right.inputs[link.target_slot].type;
+  6340→
+  6341→        const options = ["Add Node", null, "Delete", null];
+  6342→
+  6343→        const menu = new ContextMenu(options, {
+  6344→            event: event,
+  6345→            title: link.data != null ? link.data.constructor.name : null,
+  6346→            callback: inner_clicked
+  6347→        });
+  6348→
+  6349→        const graph = this.graph;
+  6350→        function inner_clicked(v, options, e) {
+  6351→            switch (v) {
+  6352→                case "Add Node":
+  6353→                    LGraphCanvas.onMenuAdd(null, null, e, menu, function (node) {
+  6354→                        if (!node.inputs || !node.inputs.length || !node.outputs || !node.outputs.length) {
+  6355→                            return;
+  6356→                        }
+  6357→                        // leave the connection type checking inside connectByType
+  6358→                        if (node_left.connectByType(link.origin_slot, node, fromType)) {
+  6359→                            node.connectByType(link.target_slot, node_right, destType);
+  6360→                            node.pos[0] -= node.size[0] * 0.5;
+  6361→                        }
+  6362→                    });
+  6363→                    break;
+  6364→
+  6365→                case "Delete":
+  6366→                    graph.removeLink(link.id);
+  6367→                    break;
+  6368→                default:
+  6369→                    /*var nodeCreated = createDefaultNodeForSlot({   nodeFrom: node_left
+  6370→                                                                                    ,slotFrom: link.origin_slot
+  6371→                                                                                    ,nodeTo: node
+  6372→                                                                                    ,slotTo: link.target_slot
+  6373→                                                                                    ,e: e
+  6374→                                                                                    ,nodeType: "AUTO"
+  6375→                                                                            });
+  6376→                    if(nodeCreated) console.log("new node in beetween "+v+" created");*/
+  6377→            }
+  6378→        }
+  6379→
+  6380→        return false;
+  6381→    }
+  6382→
+  6383→    createDefaultNodeForSlot(optPass) { // addNodeMenu for connection
+  6384→        optPass = optPass || {};
+  6385→        const opts = Object.assign({
+  6386→            nodeFrom: null // input
+  6387→            , slotFrom: null // input
+  6388→            , nodeTo: null   // output
+  6389→            , slotTo: null   // output
+  6390→            , position: []       // pass the event coords
+  6391→            , nodeType: null // choose a nodetype to add, AUTO to set at first good
+  6392→            , posAdd: [0, 0]   // adjust x,y
+  6393→            , posSizeFix: [0, 0] // alpha, adjust the position x,y based on the new node size w,h
+  6394→        }
+  6395→            , optPass
+  6396→        );
+  6397→
+  6398→        const isFrom = opts.nodeFrom && opts.slotFrom !== null;
+  6399→        const isTo = !isFrom && opts.nodeTo && opts.slotTo !== null;
+  6400→
+  6401→        if (!isFrom && !isTo) {
+  6402→            console.warn("No data passed to createDefaultNodeForSlot " + opts.nodeFrom + " " + opts.slotFrom + " " + opts.nodeTo + " " + opts.slotTo);
+  6403→            return false;
+  6404→        }
+  6405→        if (!opts.nodeType) {
+  6406→            console.warn("No type to createDefaultNodeForSlot");
+  6407→            return false;
+  6408→        }
+  6409→
+  6410→        const nodeX = isFrom ? opts.nodeFrom : opts.nodeTo;
+  6411→        let slotX = isFrom ? opts.slotFrom : opts.slotTo;
+  6412→
+  6413→        let iSlotConn = false;
+  6414→        switch (typeof slotX) {
+  6415→            case "string":
+  6416→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX, false) : nodeX.findInputSlot(slotX, false);
+  6417→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+  6418→                break;
+  6419→            case "object":
+  6420→                // ok slotX
+  6421→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX.name) : nodeX.findInputSlot(slotX.name);
+  6422→                break;
+  6423→            case "number":
+  6424→                iSlotConn = slotX;
+  6425→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+  6426→                break;
+  6427→            case "undefined":
+  6428→            default:
+  6429→                // bad ?
+  6430→                //iSlotConn = 0;
+  6431→                console.warn("Cant get slot information " + slotX);
+  6432→                return false;
+  6433→        }
+  6434→
+  6435→        if (slotX === false || iSlotConn === false) {
+  6436→            console.warn("createDefaultNodeForSlot bad slotX " + slotX + " " + iSlotConn);
+  6437→        }
+  6438→
+  6439→        // check for defaults nodes for this slottype
+  6440→        const fromSlotType = slotX.type == LiteGraph.EVENT ? "_event_" : slotX.type;
+  6441→        const slotTypesDefault = isFrom ? LiteGraph.slot_types_default_out : LiteGraph.slot_types_default_in;
+  6442→        if (slotTypesDefault && slotTypesDefault[fromSlotType]) {
+  6443→            if (slotX.link !== null) {
+  6444→                // is connected
+  6445→            } else {
+  6446→                // is not not connected
+  6447→            }
+  6448→            let nodeNewType = false;
+  6449→            if (typeof slotTypesDefault[fromSlotType] == "object" || typeof slotTypesDefault[fromSlotType] == "array") {
+  6450→                for (const typeX in slotTypesDefault[fromSlotType]) {
+  6451→                    if (opts.nodeType == slotTypesDefault[fromSlotType][typeX] || opts.nodeType == "AUTO") {
+  6452→                        nodeNewType = slotTypesDefault[fromSlotType][typeX];
+  6453→                        // console.log("opts.nodeType == slotTypesDefault[fromSlotType][typeX] :: "+opts.nodeType);
+  6454→                        break; // --------
+  6455→                    }
+  6456→                }
+  6457→            } else {
+  6458→                if (opts.nodeType == slotTypesDefault[fromSlotType] || opts.nodeType == "AUTO") nodeNewType = slotTypesDefault[fromSlotType];
+  6459→            }
+  6460→            if (nodeNewType) {
+  6461→                let nodeNewOpts = false;
+  6462→                if (typeof nodeNewType == "object" && nodeNewType.node) {
+  6463→                    nodeNewOpts = nodeNewType;
+  6464→                    nodeNewType = nodeNewType.node;
+  6465→                }
+  6466→
+  6467→                //that.graph.beforeChange();
+  6468→
+  6469→                const newNode = LiteGraph.createNode(nodeNewType);
+  6470→                if (newNode) {
+  6471→                    // if is object pass options
+  6472→                    if (nodeNewOpts) {
+  6473→                        if (nodeNewOpts.properties) {
+  6474→                            for (const i in nodeNewOpts.properties) {
+  6475→                                newNode.addProperty(i, nodeNewOpts.properties[i]);
+  6476→                            }
+  6477→                        }
+  6478→                        if (nodeNewOpts.inputs) {
+  6479→                            newNode.inputs = [];
+  6480→                            for (const i in nodeNewOpts.inputs) {
+  6481→                                newNode.addOutput(
+  6482→                                    nodeNewOpts.inputs[i][0],
+  6483→                                    nodeNewOpts.inputs[i][1]
+  6484→                                );
+  6485→                            }
+  6486→                        }
+  6487→                        if (nodeNewOpts.outputs) {
+  6488→                            newNode.outputs = [];
+  6489→                            for (const i in nodeNewOpts.outputs) {
+  6490→                                newNode.addOutput(
+  6491→                                    nodeNewOpts.outputs[i][0],
+  6492→                                    nodeNewOpts.outputs[i][1]
+  6493→                                );
+  6494→                            }
+  6495→                        }
+  6496→                        if (nodeNewOpts.title) {
+  6497→                            newNode.title = nodeNewOpts.title;
+  6498→                        }
+  6499→                        if (nodeNewOpts.json) {
+  6500→                            newNode.configure(nodeNewOpts.json);
+  6501→                        }
+  6502→                    }
+  6503→
+  6504→                    // add the node
+  6505→                    this.graph.add(newNode);
+  6506→                    newNode.pos = [
+  6507→                        opts.position[0] + opts.posAdd[0] + (opts.posSizeFix[0] ? opts.posSizeFix[0] * newNode.size[0] : 0)
+  6508→                        , opts.position[1] + opts.posAdd[1] + (opts.posSizeFix[1] ? opts.posSizeFix[1] * newNode.size[1] : 0)
+  6509→                    ]; //that.last_click_position; //[e.canvasX+30, e.canvasX+5];*/
+  6510→
+  6511→                    //that.graph.afterChange();
+  6512→
+  6513→                    // connect the two!
+  6514→                    if (isFrom) {
+  6515→                        opts.nodeFrom.connectByType(iSlotConn, newNode, fromSlotType);
+  6516→                    } else {
+  6517→                        opts.nodeTo.connectByTypeOutput(iSlotConn, newNode, fromSlotType);
+  6518→                    }
+  6519→
+  6520→                    // if connecting in between
+  6521→                    if (isFrom && isTo) {
+  6522→                        // TODO
+  6523→                    }
+  6524→
+  6525→                    return true;
+  6526→
+  6527→                } else {
+  6528→                    console.log("failed creating " + nodeNewType);
+  6529→                }
+  6530→            }
+  6531→        }
+  6532→        return false;
+  6533→    }
+  6534→
+  6535→    showConnectionMenu(optPass) { // addNodeMenu for connection
+  6536→        optPass = optPass || {};
+  6537→        const opts = Object.assign({
+  6538→            nodeFrom: null  // input
+  6539→            , slotFrom: null // input
+  6540→            , nodeTo: null   // output
+  6541→            , slotTo: null   // output
+  6542→            , e: null
+  6543→        }
+  6544→            , optPass
+  6545→        );
+  6546→
+  6547→        const isFrom = opts.nodeFrom && opts.slotFrom;
+  6548→        const isTo = !isFrom && opts.nodeTo && opts.slotTo;
+  6549→
+  6550→        if (!isFrom && !isTo) {
+  6551→            console.warn("No data passed to showConnectionMenu");
+  6552→            return false;
+  6553→        }
+  6554→
+  6555→        const nodeX = isFrom ? opts.nodeFrom : opts.nodeTo;
+  6556→        let slotX = isFrom ? opts.slotFrom : opts.slotTo;
+  6557→
+  6558→        let iSlotConn = false;
+  6559→        switch (typeof slotX) {
+  6560→            case "string":
+  6561→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX, false) : nodeX.findInputSlot(slotX, false);
+  6562→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+  6563→                break;
+  6564→            case "object":
+  6565→                // ok slotX
+  6566→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX.name) : nodeX.findInputSlot(slotX.name);
+  6567→                break;
+  6568→            case "number":
+  6569→                iSlotConn = slotX;
+  6570→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+  6571→                break;
+  6572→            default:
+  6573→                // bad ?
+  6574→                //iSlotConn = 0;
+  6575→                console.warn("Cant get slot information " + slotX);
+  6576→                return false;
+  6577→        }
+  6578→
+  6579→        const options = ["Add Node", null];
+  6580→
+  6581→        if (this.allow_searchbox) {
+  6582→            options.push("Search");
+  6583→            options.push(null);
+  6584→        }
+  6585→
+  6586→        // get defaults nodes for this slottype
+  6587→        const fromSlotType = slotX.type == LiteGraph.EVENT ? "_event_" : slotX.type;
+  6588→        const slotTypesDefault = isFrom ? LiteGraph.slot_types_default_out : LiteGraph.slot_types_default_in;
+  6589→        if (slotTypesDefault && slotTypesDefault[fromSlotType]) {
+  6590→            if (typeof slotTypesDefault[fromSlotType] == "object" || typeof slotTypesDefault[fromSlotType] == "array") {
+  6591→                for (const typeX in slotTypesDefault[fromSlotType]) {
+  6592→                    options.push(slotTypesDefault[fromSlotType][typeX]);
+  6593→                }
+  6594→            } else {
+  6595→                options.push(slotTypesDefault[fromSlotType]);
+  6596→            }
+  6597→        }
+  6598→
+  6599→        // build menu
+  6600→        const menu = new ContextMenu(options, {
+  6601→            event: opts.e,
+  6602→            title: (slotX && slotX.name != "" ? (slotX.name + (fromSlotType ? " | " : "")) : "") + (slotX && fromSlotType ? fromSlotType : ""),
+  6603→            callback: inner_clicked
+  6604→        });
+  6605→
+  6606→        const { showSearchBox, createDefaultNodeForSlot } = this;
+  6607→        // callback
+  6608→        function inner_clicked(v, options, e) {
+  6609→            //console.log("Process showConnectionMenu selection");
+  6610→            switch (v) {
+  6611→                case "Add Node":
+  6612→                    LGraphCanvas.onMenuAdd(null, null, e, menu, function (node) {
+  6613→                        if (isFrom) {
+  6614→                            opts.nodeFrom.connectByType(iSlotConn, node, fromSlotType);
+  6615→                        } else {
+  6616→                            opts.nodeTo.connectByTypeOutput(iSlotConn, node, fromSlotType);
+  6617→                        }
+  6618→                    });
+  6619→                    break;
+  6620→                case "Search":
+  6621→                    if (isFrom) {
+  6622→                        showSearchBox(e, { node_from: opts.nodeFrom, slot_from: slotX, type_filter_in: fromSlotType });
+  6623→                    } else {
+  6624→                        showSearchBox(e, { node_to: opts.nodeTo, slot_from: slotX, type_filter_out: fromSlotType });
+  6625→                    }
+  6626→                    break;
+  6627→                default:
+  6628→                    // check for defaults nodes for this slottype
+  6629→                    const nodeCreated = createDefaultNodeForSlot(Object.assign(opts, {
+  6630→                        position: [opts.e.canvasX, opts.e.canvasY]
+  6631→                        , nodeType: v
+  6632→                    }));
+  6633→                    if (nodeCreated) {
+  6634→                        // new node created
+  6635→                        //console.log("node "+v+" created")
+  6636→                    } else {
+  6637→                        // failed or v is not in defaults
+  6638→                    }
+  6639→                    break;
+  6640→            }
+  6641→        }
+  6642→
+  6643→        return false;
+  6644→    }
+  6645→
+  6646→    // refactor: there are different dialogs, some uses createDialog some dont
+  6647→    prompt(title, value, callback, event, multiline) {
+  6648→        title = title || "";
+  6649→
+  6650→        const dialog = document.createElement("div");
+  6651→        dialog.is_modified = false;
+  6652→        dialog.className = "graphdialog rounded";
+  6653→        if (multiline)
+  6654→            dialog.innerHTML = "<span class='name'></span> <textarea autofocus class='value'></textarea><button class='rounded'>OK</button>";
+  6655→        else
+  6656→            dialog.innerHTML = "<span class='name'></span> <input autofocus type='text' class='value'/><button class='rounded'>OK</button>";
+  6657→        dialog.close = () => {
+  6658→            this.prompt_box = null;
+  6659→            if (dialog.parentNode) {
+  6660→                dialog.parentNode.removeChild(dialog);
+  6661→            }
+  6662→        };
+  6663→
+  6664→        const graphcanvas = LGraphCanvas.active_canvas;
+  6665→        const canvas = graphcanvas.canvas;
+  6666→        canvas.parentNode.appendChild(dialog);
+  6667→
+  6668→        if (this.ds.scale > 1) {
+  6669→            dialog.style.transform = "scale(" + this.ds.scale + ")";
+  6670→        }
+  6671→
+  6672→        let dialogCloseTimer = null;
+  6673→        let prevent_timeout = false;
+  6674→        pointerListenerAdd(dialog, "leave", function (e) {
+  6675→            if (prevent_timeout)
+  6676→                return;
+  6677→            if (LiteGraph.dialog_close_on_mouse_leave)
+  6678→                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+  6679→                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+  6680→        });
+  6681→        pointerListenerAdd(dialog, "enter", function (e) {
+  6682→            if (LiteGraph.dialog_close_on_mouse_leave)
+  6683→                if (dialogCloseTimer) clearTimeout(dialogCloseTimer);
+  6684→        });
+  6685→        const selInDia = dialog.querySelectorAll("select");
+  6686→        if (selInDia) {
+  6687→            // if filtering, check focus changed to comboboxes and prevent closing
+  6688→            selInDia.forEach(function (selIn) {
+  6689→                selIn.addEventListener("click", function (e) {
+  6690→                    prevent_timeout++;
+  6691→                });
+  6692→                selIn.addEventListener("blur", function (e) {
+  6693→                    prevent_timeout = 0;
+  6694→                });
+  6695→                selIn.addEventListener("change", function (e) {
+  6696→                    prevent_timeout = -1;
+  6697→                });
+  6698→            });
+  6699→        }
+  6700→
+  6701→        if (this.prompt_box) {
+  6702→            this.prompt_box.close();
+  6703→        }
+  6704→        this.prompt_box = dialog;
+  6705→
+  6706→        const name_element = dialog.querySelector(".name");
+  6707→        name_element.innerText = title;
+  6708→        const value_element = dialog.querySelector(".value");
+  6709→        value_element.value = value;
+  6710→
+  6711→        const input = value_element;
+  6712→        input.addEventListener("keydown", function (e) {
+  6713→            dialog.is_modified = true;
+  6714→            if (e.keyCode == 27) {
+  6715→                //ESC
+  6716→                dialog.close();
+  6717→            } else if (e.keyCode == 13 && e.target.localName != "textarea") {
+  6718→                if (callback) {
+  6719→                    callback(this.value);
+  6720→                }
+  6721→                dialog.close();
+  6722→            } else {
+  6723→                return;
+  6724→            }
+  6725→            e.preventDefault();
+  6726→            e.stopPropagation();
+  6727→        });
+  6728→
+  6729→        const button = dialog.querySelector("button");
+  6730→        button.addEventListener("click", function (e) {
+  6731→            if (callback) {
+  6732→                callback(input.value);
+  6733→            }
+  6734→            this.setDirty(true);
+  6735→            dialog.close();
+  6736→        }.bind(this));
+  6737→
+  6738→        const rect = canvas.getBoundingClientRect();
+  6739→        let offsetx = -20;
+  6740→        let offsety = -20;
+  6741→        if (rect) {
+  6742→            offsetx -= rect.left;
+  6743→            offsety -= rect.top;
+  6744→        }
+  6745→
+  6746→        if (event) {
+  6747→            dialog.style.left = event.clientX + offsetx + "px";
+  6748→            dialog.style.top = event.clientY + offsety + "px";
+  6749→        } else {
+  6750→            dialog.style.left = canvas.width * 0.5 + offsetx + "px";
+  6751→            dialog.style.top = canvas.height * 0.5 + offsety + "px";
+  6752→        }
+  6753→
+  6754→        setTimeout(function () {
+  6755→            input.focus();
+  6756→        }, 10);
+  6757→
+  6758→        return dialog;
+  6759→    }
+  6760→
+  6761→    showEditPropertyValue(node, property, options) {
+  6762→        if (!node || node.properties[property] === undefined) {
+  6763→            return;
+  6764→        }
+  6765→
+  6766→        options = options || {};
+  6767→
+  6768→        const info = node.getPropertyInfo(property);
+  6769→        const type = info.type;
+  6770→
+  6771→        let input_html = "";
+  6772→
+  6773→        if (type == "string" || type == "number" || type == "array" || type == "object") {
+  6774→            input_html = "<input autofocus type='text' class='value'/>";
+  6775→        } else if ((type == "enum" || type == "combo") && info.values) {
+  6776→            input_html = "<select autofocus type='text' class='value'>";
+  6777→            for (const i in info.values) {
+  6778→                let v = i;
+  6779→                if (info.values.constructor === Array)
+  6780→                    v = info.values[i];
+  6781→
+  6782→                input_html +=
+  6783→                    "<option value='" +
+  6784→                    v +
+  6785→                    "' " +
+  6786→                    (v == node.properties[property] ? "selected" : "") +
+  6787→                    ">" +
+  6788→                    info.values[i] +
+  6789→                    "</option>";
+  6790→            }
+  6791→            input_html += "</select>";
+  6792→        } else if (type == "boolean" || type == "toggle") {
+  6793→            input_html =
+  6794→                "<input autofocus type='checkbox' class='value' " +
+  6795→                (node.properties[property] ? "checked" : "") +
+  6796→                "/>";
+  6797→        } else {
+  6798→            console.warn("unknown type: " + type);
+  6799→            return;
+  6800→        }
+  6801→
+  6802→        const dialog = this.createDialog(
+  6803→            "<span class='name'>" +
+  6804→            (info.label ? info.label : property) +
+  6805→            "</span>" +
+  6806→            input_html +
+  6807→            "<button>OK</button>",
+  6808→            options
+  6809→        );
+  6810→
+  6811→        let input = false;
+  6812→        if ((type == "enum" || type == "combo") && info.values) {
+  6813→            input = dialog.querySelector("select");
+  6814→            input.addEventListener("change", function (e) {
+  6815→                dialog.modified();
+  6816→                setValue(e.target.value);
+  6817→            });
+  6818→        } else if (type == "boolean" || type == "toggle") {
+  6819→            input = dialog.querySelector("input");
+  6820→            if (input) {
+  6821→                input.addEventListener("click", function (e) {
+  6822→                    dialog.modified();
+  6823→                    setValue(!!input.checked);
+  6824→                });
+  6825→            }
+  6826→        } else {
+  6827→            input = dialog.querySelector("input");
+  6828→            if (input) {
+  6829→                input.addEventListener("blur", function (e) {
+  6830→                    this.focus();
+  6831→                });
+  6832→
+  6833→                let v = node.properties[property] !== undefined ? node.properties[property] : "";
+  6834→                if (type !== 'string') {
+  6835→                    v = JSON.stringify(v);
+  6836→                }
+  6837→
+  6838→                input.value = v;
+  6839→                input.addEventListener("keydown", function (e) {
+  6840→                    if (e.keyCode == 27) {
+  6841→                        //ESC
+  6842→                        dialog.close();
+  6843→                    } else if (e.keyCode == 13) {
+  6844→                        // ENTER
+  6845→                        inner(); // save
+  6846→                    } else if (e.keyCode != 13) {
+  6847→                        dialog.modified();
+  6848→                        return;
+  6849→                    }
+  6850→                    e.preventDefault();
+  6851→                    e.stopPropagation();
+  6852→                });
+  6853→            }
+  6854→        }
+  6855→        if (input) input.focus();
+  6856→
+  6857→        const button = dialog.querySelector("button");
+  6858→        button.addEventListener("click", inner);
+  6859→
+  6860→        function inner() {
+  6861→            setValue(input.value);
+  6862→        }
+  6863→
+  6864→        function setValue(value) {
+  6865→            if (info && info.values && info.values.constructor === Object && info.values[value] != undefined)
+  6866→                value = info.values[value];
+  6867→
+  6868→            if (typeof node.properties[property] == "number") {
+  6869→                value = Number(value);
+  6870→            }
+  6871→            if (type == "array" || type == "object") {
+  6872→                value = JSON.parse(value);
+  6873→            }
+  6874→            node.properties[property] = value;
+  6875→            if (node.graph) {
+  6876→                node.graph._version++;
+  6877→            }
+  6878→            if (node.onPropertyChanged) {
+  6879→                node.onPropertyChanged(property, value);
+  6880→            }
+  6881→            if (options.onclose)
+  6882→                options.onclose();
+  6883→            dialog.close();
+  6884→            node.setDirtyCanvas(true, true);
+  6885→        }
+  6886→
+  6887→        return dialog;
+  6888→    }
+  6889→
+  6890→    // TODO refactor, there are different dialog, some uses createDialog, some dont
+  6891→    createDialog(html, options) {
+  6892→        const def_options = { checkForInput: false, closeOnLeave: true, closeOnLeave_checkModified: true };
+  6893→        options = Object.assign(def_options, options || {});
+  6894→
+  6895→        const dialog = document.createElement("div");
+  6896→        dialog.className = "graphdialog";
+  6897→        dialog.innerHTML = html;
+  6898→        dialog.is_modified = false;
+  6899→
+  6900→        const rect = this.canvas.getBoundingClientRect();
+  6901→        let offsetx = -20;
+  6902→        let offsety = -20;
+  6903→        if (rect) {
+  6904→            offsetx -= rect.left;
+  6905→            offsety -= rect.top;
+  6906→        }
+  6907→
+  6908→        if (options.position) {
+  6909→            offsetx += options.position[0];
+  6910→            offsety += options.position[1];
+  6911→        } else if (options.event) {
+  6912→            offsetx += options.event.clientX;
+  6913→            offsety += options.event.clientY;
+  6914→        } //centered
+  6915→        else {
+  6916→            offsetx += this.canvas.width * 0.5;
+  6917→            offsety += this.canvas.height * 0.5;
+  6918→        }
+  6919→
+  6920→        dialog.style.left = offsetx + "px";
+  6921→        dialog.style.top = offsety + "px";
+  6922→
+  6923→        this.canvas.parentNode.appendChild(dialog);
+  6924→
+  6925→        // check for input and use default behaviour: save on enter, close on esc
+  6926→        if (options.checkForInput) {
+  6927→            const aI = dialog.querySelectorAll("input");
+  6928→            let focused = false;
+  6929→            if (aI) {
+  6930→                aI.forEach(function (iX) {
+  6931→                    iX.addEventListener("keydown", function (e) {
+  6932→                        dialog.modified();
+  6933→                        if (e.keyCode == 27) {
+  6934→                            dialog.close();
+  6935→                        } else if (e.keyCode != 13) {
+  6936→                            return;
+  6937→                        }
+  6938→                        // set value ?
+  6939→                        e.preventDefault();
+  6940→                        e.stopPropagation();
+  6941→                    });
+  6942→                    if (!focused) iX.focus();
+  6943→                });
+  6944→            }
+  6945→        }
+  6946→
+  6947→        dialog.modified = function () {
+  6948→            dialog.is_modified = true;
+  6949→        };
+  6950→        dialog.close = function () {
+  6951→            if (dialog.parentNode) {
+  6952→                dialog.parentNode.removeChild(dialog);
+  6953→            }
+  6954→        };
+  6955→
+  6956→        let dialogCloseTimer = null;
+  6957→        let prevent_timeout = false;
+  6958→        dialog.addEventListener("mouseleave", function (e) {
+  6959→            if (prevent_timeout)
+  6960→                return;
+  6961→            if (options.closeOnLeave || LiteGraph.dialog_close_on_mouse_leave)
+  6962→                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+  6963→                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+  6964→        });
+  6965→        dialog.addEventListener("mouseenter", function (e) {
+  6966→            if (options.closeOnLeave || LiteGraph.dialog_close_on_mouse_leave)
+  6967→                if (dialogCloseTimer) clearTimeout(dialogCloseTimer);
+  6968→        });
+  6969→        const selInDia = dialog.querySelectorAll("select");
+  6970→        if (selInDia) {
+  6971→            // if filtering, check focus changed to comboboxes and prevent closing
+  6972→            selInDia.forEach(function (selIn) {
+  6973→                selIn.addEventListener("click", function (e) {
+  6974→                    prevent_timeout++;
+  6975→                });
+  6976→                selIn.addEventListener("blur", function (e) {
+  6977→                    prevent_timeout = 0;
+  6978→                });
+  6979→                selIn.addEventListener("change", function (e) {
+  6980→                    prevent_timeout = -1;
+  6981→                });
+  6982→            });
+  6983→        }
+  6984→
+  6985→        return dialog;
+  6986→    }
+  6987→
+  6988→    createPanel(title, options) {
+  6989→        options = options || {};
+  6990→
+  6991→        const ref_window = options.window || window;
+  6992→        const root = document.createElement("div");
+  6993→        root.className = "litegraph dialog";
+  6994→        root.innerHTML = "<div class='dialog-header'><span class='dialog-title'></span></div><div class='dialog-content'></div><div style='display:none;' class='dialog-alt-content'></div><div class='dialog-footer'></div>";
+  6995→        root.header = root.querySelector(".dialog-header");
+  6996→
+  6997→        if (options.width)
+  6998→            root.style.width = options.width + (options.width.constructor === Number ? "px" : "");
+  6999→        if (options.height)
+  7000→            root.style.height = options.height + (options.height.constructor === Number ? "px" : "");
+  7001→        if (options.closable) {
+  7002→            const close = document.createElement("span");
+  7003→            close.innerHTML = "&#10005;";
+  7004→            close.classList.add("close");
+  7005→            close.addEventListener("click", function () {
+  7006→                root.close();
+  7007→            });
+  7008→            root.header.appendChild(close);
+  7009→        }
+  7010→        root.title_element = root.querySelector(".dialog-title");
+  7011→        root.title_element.innerText = title;
+  7012→        root.content = root.querySelector(".dialog-content");
+  7013→        root.alt_content = root.querySelector(".dialog-alt-content");
+  7014→        root.footer = root.querySelector(".dialog-footer");
+  7015→
+  7016→        root.close = function () {
+  7017→            if (root.onClose && typeof root.onClose == "function") {
+  7018→                root.onClose();
+  7019→            }
+  7020→            if (root.parentNode)
+  7021→                root.parentNode.removeChild(root);
+  7022→            /* XXX CHECK THIS */
+  7023→            if (this.parentNode) {
+  7024→                this.parentNode.removeChild(this);
+  7025→            }
+  7026→            /* XXX this was not working, was fixed with an IF, check this */
+  7027→        };
+  7028→
+  7029→        // function to swap panel content
+  7030→        root.toggleAltContent = function (force) {
+  7031→            let vTo, vAlt;
+  7032→            if (typeof force != "undefined") {
+  7033→                vTo = force ? "block" : "none";
+  7034→                vAlt = force ? "none" : "block";
+  7035→            } else {
+  7036→                vTo = root.alt_content.style.display != "block" ? "block" : "none";
+  7037→                vAlt = root.alt_content.style.display != "block" ? "none" : "block";
+  7038→            }
+  7039→            root.alt_content.style.display = vTo;
+  7040→            root.content.style.display = vAlt;
+  7041→        };
+  7042→
+  7043→        root.toggleFooterVisibility = function (force) {
+  7044→            let vTo;
+  7045→            if (typeof force != "undefined") {
+  7046→                vTo = force ? "block" : "none";
+  7047→            } else {
+  7048→                vTo = root.footer.style.display != "block" ? "block" : "none";
+  7049→            }
+  7050→            root.footer.style.display = vTo;
+  7051→        };
+  7052→
+  7053→        root.clear = function () {
+  7054→            this.content.innerHTML = "";
+  7055→        };
+  7056→
+  7057→        root.addHTML = function (code, classname, on_footer) {
+  7058→            const elem = document.createElement("div");
+  7059→            if (classname)
+  7060→                elem.className = classname;
+  7061→            elem.innerHTML = code;
+  7062→            if (on_footer)
+  7063→                root.footer.appendChild(elem);
+  7064→            else
+  7065→                root.content.appendChild(elem);
+  7066→            return elem;
+  7067→        };
+  7068→
+  7069→        root.addButton = function (name, callback, options) {
+  7070→            const elem = document.createElement("button");
+  7071→            elem.innerText = name;
+  7072→            elem.options = options;
+  7073→            elem.classList.add("btn");
+  7074→            elem.addEventListener("click", callback);
+  7075→            root.footer.appendChild(elem);
+  7076→            return elem;
+  7077→        };
+  7078→
+  7079→        root.addSeparator = function () {
+  7080→            const elem = document.createElement("div");
+  7081→            elem.className = "separator";
+  7082→            root.content.appendChild(elem);
+  7083→        };
+  7084→
+  7085→        root.addWidget = function (type, name, value, options, callback) {
+  7086→            options = options || {};
+  7087→            let str_value = String(value);
+  7088→            type = type.toLowerCase();
+  7089→            if (type == "number")
+  7090→                str_value = value.toFixed(3);
+  7091→
+  7092→            const elem = document.createElement("div");
+  7093→            elem.className = "property";
+  7094→            elem.innerHTML = "<span class='property_name'></span><span class='property_value'></span>";
+  7095→            elem.querySelector(".property_name").innerText = options.label || name;
+  7096→            const value_element = elem.querySelector(".property_value");
+  7097→            value_element.innerText = str_value;
+  7098→            elem.dataset["property"] = name;
+  7099→            elem.dataset["type"] = options.type || type;
+  7100→            elem.options = options;
+  7101→            elem.value = value;
+  7102→
+  7103→            if (type == "code")
+  7104→                elem.addEventListener("click", function (e) { root.inner_showCodePad(this.dataset["property"]); });
+  7105→            else if (type == "boolean") {
+  7106→                elem.classList.add("boolean");
+  7107→                if (value)
+  7108→                    elem.classList.add("bool-on");
+  7109→                elem.addEventListener("click", function () {
+  7110→                    const propname = this.dataset["property"];
+  7111→                    this.value = !this.value;
+  7112→                    this.classList.toggle("bool-on");
+  7113→                    this.querySelector(".property_value").innerText = this.value ? "true" : "false";
+  7114→                    innerChange(propname, this.value);
+  7115→                });
+  7116→            } else if (type == "string" || type == "number") {
+  7117→                value_element.setAttribute("contenteditable", true);
+  7118→                value_element.addEventListener("keydown", function (e) {
+  7119→                    if (e.code == "Enter" && (type != "string" || !e.shiftKey)) // allow for multiline
+  7120→                    {
+  7121→                        e.preventDefault();
+  7122→                        this.blur();
+  7123→                    }
+  7124→                });
+  7125→                value_element.addEventListener("blur", function () {
+  7126→                    let v = this.innerText;
+  7127→                    const propname = this.parentNode.dataset["property"];
+  7128→                    const proptype = this.parentNode.dataset["type"];
+  7129→                    if (proptype == "number")
+  7130→                        v = Number(v);
+  7131→                    innerChange(propname, v);
+  7132→                });
+  7133→            } else if (type == "enum" || type == "combo") {
+  7134→                str_value = LGraphCanvas.getPropertyPrintableValue(value, options.values);
+  7135→                value_element.innerText = str_value;
+  7136→
+  7137→                value_element.addEventListener("click", function (event) {
+  7138→                    const values = options.values || [];
+  7139→                    const propname = this.parentNode.dataset["property"];
+  7140→                    const clickedElem = event.currentTarget;
+  7141→                    const menu = new ContextMenu(values, {
+  7142→                        event: event,
+  7143→                        className: "dark",
+  7144→                        callback: inner_clicked
+  7145→                    },
+  7146→                        ref_window);
+  7147→                    function inner_clicked(v, option, event) {
+  7148→                        clickedElem.innerText = v;
+  7149→                        innerChange(propname, v);
+  7150→                        return false;
+  7151→                    }
+  7152→                });
+  7153→            }
+  7154→
+  7155→            root.content.appendChild(elem);
+  7156→
+  7157→            function innerChange(name, value) {
+  7158→                if (options.callback)
+  7159→                    options.callback(name, value, options);
+  7160→                if (callback)
+  7161→                    callback(name, value, options);
+  7162→            }
+  7163→
+  7164→            return elem;
+  7165→        };
+  7166→
+  7167→        if (root.onOpen && typeof root.onOpen == "function") root.onOpen();
+  7168→
+  7169→        return root;
+  7170→    }
+  7171→
+  7172→    closePanels() {
+  7173→        let panel = document.querySelector("#node-panel");
+  7174→        if (panel)
+  7175→            panel.close();
+  7176→        panel = document.querySelector("#option-panel");
+  7177→        if (panel)
+  7178→            panel.close();
+  7179→    }
+  7180→
+  7181→    showShowNodePanel(node) {
+  7182→        this.SELECTED_NODE = node;
+  7183→        this.closePanels();
+  7184→        const ref_window = this.getCanvasWindow();
+  7185→        const panel = this.createPanel(node.title || "", {
+  7186→            closable: true
+  7187→            , window: ref_window
+  7188→            , onOpen: () => {
+  7189→                this.NODEPANEL_IS_OPEN = true;
+  7190→            }
+  7191→            , onClose: () => {
+  7192→                this.NODEPANEL_IS_OPEN = false;
+  7193→                this.node_panel = null;
+  7194→            }
+  7195→        });
+  7196→        this.node_panel = panel;
+  7197→        panel.id = "node-panel";
+  7198→        panel.node = node;
+  7199→        panel.classList.add("settings");
+  7200→
+  7201→        function inner_refresh() {
+  7202→            panel.content.innerHTML = ""; //clear
+  7203→            panel.addHTML("<span class='node_type'>" + node.type + "</span><span class='node_desc'>" + (node.constructor.desc || "") + "</span><span class='separator'></span>");
+  7204→
+  7205→            panel.addHTML("<h3>Properties</h3>");
+  7206→
+  7207→            const fUpdate = (name, value) => {
+  7208→                this.graph.beforeChange(node);
+  7209→                switch (name) {
+  7210→                    case "Title":
+  7211→                        node.title = value;
+  7212→                        break;
+  7213→                    case "Mode":
+  7214→                        const kV = Object.values(LiteGraph.NODE_MODES).indexOf(value);
+  7215→                        if (kV >= 0 && LiteGraph.NODE_MODES[kV]) {
+  7216→                            node.changeMode(kV);
+  7217→                        } else {
+  7218→                            console.warn("unexpected mode: " + value);
+  7219→                        }
+  7220→                        break;
+  7221→                    case "Color":
+  7222→                        if (LGraphCanvas.node_colors[value]) {
+  7223→                            node.color = LGraphCanvas.node_colors[value].color;
+  7224→                            node.bgcolor = LGraphCanvas.node_colors[value].bgcolor;
+  7225→                        } else {
+  7226→                            console.warn("unexpected color: " + value);
+  7227→                        }
+  7228→                        break;
+  7229→                    default:
+  7230→                        node.setProperty(name, value);
+  7231→                        break;
+  7232→                }
+  7233→                this.graph.afterChange();
+  7234→                this.dirty_canvas = true;
+  7235→            };
+  7236→
+  7237→            panel.addWidget("string", "Title", node.title, {}, fUpdate);
+  7238→
+  7239→            panel.addWidget("combo", "Mode", LiteGraph.NODE_MODES[node.mode], { values: LiteGraph.NODE_MODES }, fUpdate);
+  7240→
+  7241→            let nodeCol = "";
+  7242→            if (node.color !== undefined) {
+  7243→                nodeCol = Object.keys(LGraphCanvas.node_colors).filter(function (nK) { return LGraphCanvas.node_colors[nK].color == node.color; });
+  7244→            }
+  7245→
+  7246→            panel.addWidget("combo", "Color", nodeCol, { values: Object.keys(LGraphCanvas.node_colors) }, fUpdate);
+  7247→
+  7248→            for (const pName in node.properties) {
+  7249→                const value = node.properties[pName];
+  7250→                const info = node.getPropertyInfo(pName);
+  7251→                const type = info.type || "string";
+  7252→
+  7253→                //in case the user wants control over the side panel widget
+  7254→                if (node.onAddPropertyToPanel && node.onAddPropertyToPanel(pName, panel))
+  7255→                    continue;
+  7256→
+  7257→                panel.addWidget(info.widget || info.type, pName, value, info, fUpdate);
+  7258→            }
+  7259→
+  7260→            panel.addSeparator();
+  7261→
+  7262→            if (node.onShowCustomPanelInfo)
+  7263→                node.onShowCustomPanelInfo(panel);
+  7264→
+  7265→            panel.footer.innerHTML = ""; // clear
+  7266→            panel.addButton("Delete", function () {
+  7267→                if (node.block_delete)
+  7268→                    return;
+  7269→                node.graph.remove(node);
+  7270→                panel.close();
+  7271→            }).classList.add("delete");
+  7272→        }
+  7273→
+  7274→        panel.inner_showCodePad = function (propname) {
+  7275→            panel.classList.remove("settings");
+  7276→            panel.classList.add("centered");
+  7277→
+  7278→            panel.alt_content.innerHTML = "<textarea class='code'></textarea>";
+  7279→            const textarea = panel.alt_content.querySelector("textarea");
+  7280→            const fDoneWith = function () {
+  7281→                panel.toggleAltContent(false);
+  7282→                panel.toggleFooterVisibility(true);
+  7283→                textarea.parentNode.removeChild(textarea);
+  7284→                panel.classList.add("settings");
+  7285→                panel.classList.remove("centered");
+  7286→                inner_refresh();
+  7287→            };
+  7288→            textarea.value = node.properties[propname];
+  7289→            textarea.addEventListener("keydown", function (e) {
+  7290→                if (e.code == "Enter" && e.ctrlKey) {
+  7291→                    node.setProperty(propname, textarea.value);
+  7292→                    fDoneWith();
+  7293→                }
+  7294→            });
+  7295→            panel.toggleAltContent(true);
+  7296→            panel.toggleFooterVisibility(false);
+  7297→            textarea.style.height = "calc(100% - 40px)";
+  7298→            const assign = panel.addButton("Assign", function () {
+  7299→                node.setProperty(propname, textarea.value);
+  7300→                fDoneWith();
+  7301→            });
+  7302→            panel.alt_content.appendChild(assign);
+  7303→            const button = panel.addButton("Close", fDoneWith);
+  7304→            button.style.float = "right";
+  7305→            panel.alt_content.appendChild(button);
+  7306→        };
+  7307→
+  7308→        inner_refresh();
+  7309→
+  7310→        this.canvas.parentNode.appendChild(panel);
+  7311→    }
+  7312→
+  7313→    showSubgraphPropertiesDialog(node) {
+  7314→        console.log("showing subgraph properties dialog");
+  7315→
+  7316→        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+  7317→        if (old_panel)
+  7318→            old_panel.close();
+  7319→
+  7320→        const panel = this.createPanel("Subgraph Inputs", { closable: true, width: 500 });
+  7321→        panel.node = node;
+  7322→        panel.classList.add("subgraph_dialog");
+  7323→
+  7324→        function inner_refresh() {
+  7325→            panel.clear();
+  7326→
+  7327→            //show currents
+  7328→            if (node.inputs)
+  7329→                for (let i = 0; i < node.inputs.length; ++i) {
+  7330→                    const input = node.inputs[i];
+  7331→                    if (input.not_subgraph_input)
+  7332→                        continue;
+  7333→                    const html = "<button>&#10005;</button> <span class='bullet_icon'></span><span class='name'></span><span class='type'></span>";
+  7334→                    const elem = panel.addHTML(html, "subgraph_property");
+  7335→                    elem.dataset["name"] = input.name;
+  7336→                    elem.dataset["slot"] = i;
+  7337→                    elem.querySelector(".name").innerText = input.name;
+  7338→                    elem.querySelector(".type").innerText = input.type;
+  7339→                    elem.querySelector("button").addEventListener("click", function (e) {
+  7340→                        node.removeInput(Number(this.parentNode.dataset["slot"]));
+  7341→                        inner_refresh();
+  7342→                    });
+  7343→                }
+  7344→        }
+  7345→
+  7346→        //add extra
+  7347→        const html = " + <span class='label'>Name</span><input class='name'/><span class='label'>Type</span><input class='type'></input><button>+</button>";
+  7348→        const elem = panel.addHTML(html, "subgraph_property extra", true);
+  7349→        elem.querySelector("button").addEventListener("click", function (e) {
+  7350→            const elem = this.parentNode;
+  7351→            const name = elem.querySelector(".name").value;
+  7352→            const type = elem.querySelector(".type").value;
+  7353→            if (!name || node.findInputSlot(name) != -1)
+  7354→                return;
+  7355→            node.addInput(name, type);
+  7356→            elem.querySelector(".name").value = "";
+  7357→            elem.querySelector(".type").value = "";
+  7358→            inner_refresh();
+  7359→        });
+  7360→
+  7361→        inner_refresh();
+  7362→        this.canvas.parentNode.appendChild(panel);
+  7363→        return panel;
+  7364→    }
+  7365→
+  7366→    showSubgraphPropertiesDialogRight(node) {
+  7367→        // console.log("showing subgraph properties dialog");
+  7368→        // old_panel if old_panel is exist close it
+  7369→        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+  7370→        if (old_panel)
+  7371→            old_panel.close();
+  7372→        // new panel
+  7373→        const panel = this.createPanel("Subgraph Outputs", { closable: true, width: 500 });
+  7374→        panel.node = node;
+  7375→        panel.classList.add("subgraph_dialog");
+  7376→
+  7377→        function inner_refresh() {
+  7378→            panel.clear();
+  7379→            //show currents
+  7380→            if (node.outputs)
+  7381→                for (let i = 0; i < node.outputs.length; ++i) {
+  7382→                    const input = node.outputs[i];
+  7383→                    if (input.not_subgraph_output)
+  7384→                        continue;
+  7385→                    const html = "<button>&#10005;</button> <span class='bullet_icon'></span><span class='name'></span><span class='type'></span>";
+  7386→                    const elem = panel.addHTML(html, "subgraph_property");
+  7387→                    elem.dataset["name"] = input.name;
+  7388→                    elem.dataset["slot"] = i;
+  7389→                    elem.querySelector(".name").innerText = input.name;
+  7390→                    elem.querySelector(".type").innerText = input.type;
+  7391→                    elem.querySelector("button").addEventListener("click", function (e) {
+  7392→                        node.removeOutput(Number(this.parentNode.dataset["slot"]));
+  7393→                        inner_refresh();
+  7394→                    });
+  7395→                }
+  7396→        }
+  7397→
+  7398→        //add extra
+  7399→        const html = " + <span class='label'>Name</span><input class='name'/><span class='label'>Type</span><input class='type'></input><button>+</button>";
+  7400→        const elem = panel.addHTML(html, "subgraph_property extra", true);
+  7401→        elem.querySelector(".name").addEventListener("keydown", function (e) {
+  7402→            if (e.keyCode == 13) {
+  7403→                addOutput.apply(this);
+  7404→            }
+  7405→        });
+  7406→        elem.querySelector("button").addEventListener("click", function (e) {
+  7407→            addOutput.apply(this);
+  7408→        });
+  7409→        function addOutput() {
+  7410→            const elem = this.parentNode;
+  7411→            const name = elem.querySelector(".name").value;
+  7412→            const type = elem.querySelector(".type").value;
+  7413→            if (!name || node.findOutputSlot(name) != -1)
+  7414→                return;
+  7415→            node.addOutput(name, type);
+  7416→            elem.querySelector(".name").value = "";
+  7417→            elem.querySelector(".type").value = "";
+  7418→            inner_refresh();
+  7419→        }
+  7420→
+  7421→        inner_refresh();
+  7422→        this.canvas.parentNode.appendChild(panel);
+  7423→        return panel;
+  7424→    }
+  7425→}
+  7426→
+  7427→// Assign to LiteGraph for compatibility
+  7428→// Lazy registration to avoid circular dependency issues
+  7429→// LiteGraph.LGraphCanvas will be set after all modules are loaded
+  7430→
+  7431→export { LGraphCanvas };
+  7432→export default LGraphCanvas;
+  7433→

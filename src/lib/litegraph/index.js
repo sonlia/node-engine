@@ -13,7 +13,7 @@ import { LGraphGroup } from "./LGraphGroup.js";
 import { DragAndScale } from "./DragAndScale.js";
 import { LGraphCanvas } from "./LGraphCanvas.js";
 import { ContextMenu } from "./ContextMenu.js";
-import { _setLiteGraphRef } from "./utils.js";
+import { _setLiteGraphRef, pointerListenerAdd, pointerListenerRemove } from "./utils.js";
 
 // ===== Lazy Registration =====
 // These assignments must happen AFTER all modules are imported
@@ -30,6 +30,11 @@ LiteGraph.LGraphGroup = LGraphGroup;
 LiteGraph.LGraphCanvas = LGraphCanvas;
 LiteGraph.DragAndScale = DragAndScale;
 LiteGraph.ContextMenu = ContextMenu;
+
+// Register utility functions on LiteGraph for API compatibility
+// (In original code, these were properties of the LiteGraph object)
+LiteGraph.pointerListenerAdd = pointerListenerAdd;
+LiteGraph.pointerListenerRemove = pointerListenerRemove;
 
 // Process any pending node type registrations that happened before
 // _LGraphNode was set (e.g., nodes registered in page.tsx at module level)

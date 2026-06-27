@@ -1,0 +1,2002 @@
+     1→/**
+     2→ * LGraphCanvas - ES6 Class Refactoring
+     3→ *
+     4→ * The core visual component for rendering and interacting with a node graph.
+     5→ * Handles canvas drawing, mouse/keyboard interaction, selection, connection
+     6→ * rendering, context menus, search boxes, and subgraph navigation.
+     7→ *
+     8→ * Original: prototype-based constructor in litegraph.js (lines 5325-13556)
+     9→ * Refactored: ES6 class with static properties and methods
+    10→ */
+    11→
+    12→import { LiteGraph } from "./LiteGraph.js";
+    13→import { DragAndScale } from "./DragAndScale.js";
+    14→import { ContextMenu } from "./ContextMenu.js";
+    15→import { LGraphGroup } from "./LGraphGroup.js";
+    16→import {
+    17→    clamp,
+    18→    distance,
+    19→    isInsideRectangle,
+    20→    overlapBounding,
+    21→    getTime,
+    22→    pointerListenerAdd,
+    23→    pointerListenerRemove,
+    24→} from "./utils.js";
+    25→
+    26→// Temp arrays reused during rendering to avoid GC pressure
+    27→const temp_vec2 = new Float32Array(2);
+    28→const tmp_area = new Float32Array(4);
+    29→const margin_area = new Float32Array(4);
+    30→
+    31→/**
+    32→ * Get the mouse button from an event.
+    33→ * PointerEvent may not set e.which, so we fall back to e.button.
+    34→ * Returns: 1=left, 2=middle, 3=right
+    35→ */
+    36→function getMouseButton(e) {
+    37→    if (e.which !== undefined && e.which !== 0) return e.which;
+    38→    // e.button: 0=left, 1=middle, 2=right
+    39→    if (e.button === 0) return 1;
+    40→    if (e.button === 1) return 2;
+    41→    if (e.button === 2) return 3;
+    42→    return 0;
+    43→}
+    44→const link_bounding = new Float32Array(4);
+    45→const tempA = new Float32Array(2);
+    46→const tempB = new Float32Array(2);
+    47→const temp = new Float32Array(4);
+    48→
+    49→class LGraphCanvas {
+    50→    // ==================== STATIC PROPERTIES ====================
+    51→
+    52→    static DEFAULT_BACKGROUND_IMAGE =
+    53→        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAQBJREFUeNrs1rEKwjAUhlETUkj3vP9rdmr1Ysammk2w5wdxuLgcMHyptfawuZX4pJSWZTnfnu/lnIe/jNNxHHGNn//HNbbv+4dr6V+11uF527arU7+u63qfa/bnmh8sWLBgwYJlqRf8MEptXPBXJXa37BSl3ixYsGDBMliwFLyCV/DeLIMFCxYsWLBMwSt4Be/NggXLYMGCBUvBK3iNruC9WbBgwYJlsGApeAWv4L1ZBgsWLFiwYJmCV/AK3psFC5bBggULloJX8BpdwXuzYMGCBctgwVLwCl7Be7MMFixYsGDBsu8FH1FaSmExVfAxBa/gvVmwYMGCZbBg/W4vAQYA5tRF9QYlv/QAAAAASUVORK5CYII=";
+    54→
+    55→    static link_type_colors = {
+    56→        "-1": LiteGraph.EVENT_LINK_COLOR,
+    57→        number: "#AAA",
+    58→        node: "#DCA",
+    59→    };
+    60→
+    61→    static gradients = {}; // cache of gradients
+    62→
+    63→    static node_colors = {
+    64→        red: { color: "#322", bgcolor: "#533", groupcolor: "#A88" },
+    65→        brown: { color: "#332922", bgcolor: "#593930", groupcolor: "#b06634" },
+    66→        green: { color: "#232", bgcolor: "#353", groupcolor: "#8A8" },
+    67→        blue: { color: "#223", bgcolor: "#335", groupcolor: "#88A" },
+    68→        pale_blue: { color: "#2a363b", bgcolor: "#3f5159", groupcolor: "#3f789e" },
+    69→        cyan: { color: "#233", bgcolor: "#355", groupcolor: "#8AA" },
+    70→        purple: { color: "#323", bgcolor: "#535", groupcolor: "#a1309b" },
+    71→        yellow: { color: "#432", bgcolor: "#653", groupcolor: "#b58b2a" },
+    72→        black: { color: "#222", bgcolor: "#000", groupcolor: "#444" },
+    73→    };
+    74→
+    75→    static active_canvas = null;
+    76→    static active_node = null;
+    77→    static search_limit = -1;
+    78→
+    79→    // ==================== CONSTRUCTOR ====================
+    80→
+    81→    /**
+    82→     * @param {HTMLCanvasElement|string} canvas - The canvas element or selector
+    83→     * @param {LGraph} [graph] - Optional graph to attach
+    84→     * @param {Object} [options] - { skip_rendering, autoresize, viewport }
+    85→     */
+    86→    constructor(canvas, graph, options) {
+    87→        this.options = (options = options || {});
+    88→
+    89→        this.background_image = LGraphCanvas.DEFAULT_BACKGROUND_IMAGE;
+    90→
+    91→        if (canvas && canvas.constructor === String) {
+    92→            canvas = document.querySelector(canvas);
+    93→        }
+    94→
+    95→        this.ds = new DragAndScale();
+    96→        this.zoom_modify_alpha = true; // otherwise it generates ugly patterns when scaling down too much
+    97→
+    98→        this.title_text_font = "" + LiteGraph.NODE_TEXT_SIZE + "px Arial";
+    99→        this.inner_text_font =
+   100→            "normal " + LiteGraph.NODE_SUBTEXT_SIZE + "px Arial";
+   101→        this.node_title_color = LiteGraph.NODE_TITLE_COLOR;
+   102→        this.default_link_color = LiteGraph.LINK_COLOR;
+   103→        this.default_connection_color = {
+   104→            input_off: "#778",
+   105→            input_on: "#7F7",
+   106→            output_off: "#778",
+   107→            output_on: "#7F7",
+   108→        };
+   109→        this.default_connection_color_byType = {};
+   110→        this.default_connection_color_byTypeOff = {};
+   111→
+   112→        // Rendering flags
+   113→        this.highquality_render = true;
+   114→        this.use_gradients = false;
+   115→        this.editor_alpha = 1;
+   116→        this.pause_rendering = false;
+   117→        this.clear_background = true;
+   118→        this.clear_background_color = "#222";
+   119→
+   120→        // Interaction flags
+   121→        this.read_only = false;
+   122→        this.render_only_selected = true;
+   123→        this.live_mode = false;
+   124→        this.show_info = true;
+   125→        this.allow_dragcanvas = true;
+   126→        this.allow_dragnodes = true;
+   127→        this.allow_interaction = true;
+   128→        this.multi_select = false;
+   129→        this.allow_searchbox = true;
+   130→        this.allow_reconnect_links = true;
+   131→        this.align_to_grid = false;
+   132→
+   133→        this.drag_mode = false;
+   134→        this.dragging_rectangle = null;
+   135→
+   136→        this.filter = null;
+   137→
+   138→        this.set_canvas_dirty_on_mouse_event = true;
+   139→        this.always_render_background = false;
+   140→        this.render_shadows = true;
+   141→        this.render_canvas_border = true;
+   142→        this.render_connections_shadows = false;
+   143→        this.render_connections_border = true;
+   144→        this.render_curved_connections = false;
+   145→        this.render_connection_arrows = false;
+   146→        this.render_collapsed_slots = true;
+   147→        this.render_execution_order = false;
+   148→        this.render_title_colored = true;
+   149→        this.render_link_tooltip = true;
+   150→
+   151→        this.links_render_mode = LiteGraph.SPLINE_LINK;
+   152→
+   153→        this.mouse = [0, 0];
+   154→        this.graph_mouse = [0, 0];
+   155→        this.canvas_mouse = this.graph_mouse; // LEGACY
+   156→
+   157→        // Search box callbacks
+   158→        this.onSearchBox = null;
+   159→        this.onSearchBoxSelection = null;
+   160→
+   161→        // Callbacks
+   162→        this.onMouse = null;
+   163→        this.onDrawBackground = null;
+   164→        this.onDrawForeground = null;
+   165→        this.onDrawOverlay = null;
+   166→        this.onDrawLinkTooltip = null;
+   167→        this.onNodeMoved = null;
+   168→        this.onSelectionChange = null;
+   169→        this.onConnectingChange = null;
+   170→        this.onBeforeChange = null;
+   171→        this.onAfterChange = null;
+   172→
+   173→        this.connections_width = 3;
+   174→        this.round_radius = 8;
+   175→
+   176→        this.current_node = null;
+   177→        this.node_widget = null;
+   178→        this.over_link_center = null;
+   179→        this.last_mouse_position = [0, 0];
+   180→        this.visible_area = this.ds.visible_area;
+   181→        this.visible_links = [];
+   182→
+   183→        this.viewport = options.viewport || null;
+   184→
+   185→        // Link canvas and graph
+   186→        if (graph) {
+   187→            graph.attachCanvas(this);
+   188→        }
+   189→
+   190→        this.setCanvas(canvas, options.skip_events);
+   191→        this.clear();
+   192→
+   193→        if (!options.skip_render) {
+   194→            this.startRendering();
+   195→        }
+   196→
+   197→        this.autoresize = options.autoresize;
+   198→    }
+   199→
+   200→    // ==================== INIT & CLEAR ====================
+   201→
+   202→    /** clears all the data inside */
+   203→    clear() {
+   204→        this.frame = 0;
+   205→        this.last_draw_time = 0;
+   206→        this.render_time = 0;
+   207→        this.fps = 0;
+   208→
+   209→        this.dragging_rectangle = null;
+   210→
+   211→        this.selected_nodes = {};
+   212→        this.selected_group = null;
+   213→
+   214→        this.visible_nodes = [];
+   215→        this.node_dragged = null;
+   216→        this.node_over = null;
+   217→        this.node_capturing_input = null;
+   218→        this.connecting_node = null;
+   219→        this.highlighted_links = {};
+   220→
+   221→        this.dragging_canvas = false;
+   222→
+   223→        this.dirty_canvas = true;
+   224→        this.dirty_bgcanvas = true;
+   225→        this.dirty_area = null;
+   226→
+   227→        this.node_in_panel = null;
+   228→        this.node_widget = null;
+   229→
+   230→        this.last_mouse = [0, 0];
+   231→        this.last_mouseclick = 0;
+   232→        this.pointer_is_down = false;
+   233→        this.pointer_is_double = false;
+   234→        this.visible_area.set([0, 0, 0, 0]);
+   235→
+   236→        if (this.onClear) {
+   237→            this.onClear();
+   238→        }
+   239→    }
+   240→
+   241→    // ==================== GRAPH MANAGEMENT ====================
+   242→
+   243→    /** assigns a graph, you can reassign graphs to the same canvas */
+   244→    setGraph(graph, skip_clear) {
+   245→        if (this.graph === graph) return;
+   246→
+   247→        if (!skip_clear) {
+   248→            this.clear();
+   249→        }
+   250→
+   251→        if (!graph && this.graph) {
+   252→            this.graph.detachCanvas(this);
+   253→            return;
+   254→        }
+   255→
+   256→        graph.attachCanvas(this);
+   257→
+   258→        // remove the graph stack in case a subgraph was open
+   259→        if (this._graph_stack) this._graph_stack = null;
+   260→
+   261→        this.setDirty(true, true);
+   262→    }
+   263→
+   264→    /** returns the top level graph (in case there are subgraphs open on the canvas) */
+   265→    getTopGraph() {
+   266→        if (this._graph_stack && this._graph_stack.length)
+   267→            return this._graph_stack[0];
+   268→        return this.graph;
+   269→    }
+   270→
+   271→    /** opens a graph contained inside a node in the current graph */
+   272→    openSubgraph(graph) {
+   273→        if (!graph) throw "graph cannot be null";
+   274→        if (this.graph === graph) throw "graph cannot be the same";
+   275→
+   276→        this.clear();
+   277→
+   278→        if (this.graph) {
+   279→            if (!this._graph_stack) {
+   280→                this._graph_stack = [];
+   281→            }
+   282→            this._graph_stack.push(this.graph);
+   283→        }
+   284→
+   285→        graph.attachCanvas(this);
+   286→        this.setDirty(true, true);
+   287→    }
+   288→
+   289→    /** closes a subgraph contained inside a node */
+   290→    closeSubgraph() {
+   291→        if (!this._graph_stack || this._graph_stack.length === 0) return;
+   292→        const subgraph_node = this.graph._subgraph_node;
+   293→        const graph = this._graph_stack.pop();
+   294→        this.selected_nodes = {};
+   295→        this.highlighted_links = {};
+   296→        graph.attachCanvas(this);
+   297→        this.setDirty(true, true);
+   298→        if (subgraph_node) {
+   299→            this.centerOnNode(subgraph_node);
+   300→            this.selectNodes([subgraph_node]);
+   301→        }
+   302→        this.ds.offset = [0, 0];
+   303→        this.ds.scale = 1;
+   304→    }
+   305→
+   306→    /** returns the visually active graph */
+   307→    getCurrentGraph() {
+   308→        return this.graph;
+   309→    }
+   310→
+   311→    // ==================== CANVAS SETUP ====================
+   312→
+   313→    /** assigns a canvas */
+   314→    setCanvas(canvas, skip_events) {
+   315→        if (canvas) {
+   316→            if (canvas.constructor === String) {
+   317→                canvas = document.getElementById(canvas);
+   318→                if (!canvas) {
+   319→                    throw "Error creating LiteGraph canvas: Canvas not found";
+   320→                }
+   321→            }
+   322→        }
+   323→
+   324→        if (canvas === this.canvas) return;
+   325→
+   326→        if (!canvas && this.canvas) {
+   327→            if (!skip_events) {
+   328→                this.unbindEvents();
+   329→            }
+   330→        }
+   331→
+   332→        this.canvas = canvas;
+   333→        this.ds.element = canvas;
+   334→
+   335→        if (!canvas) return;
+   336→
+   337→        canvas.className += " lgraphcanvas";
+   338→        canvas.data = this;
+   339→        canvas.tabindex = "1";
+   340→
+   341→        // bg canvas: used for non changing stuff
+   342→        this.bgcanvas = null;
+   343→        if (!this.bgcanvas) {
+   344→            this.bgcanvas = document.createElement("canvas");
+   345→            this.bgcanvas.width = this.canvas.width;
+   346→            this.bgcanvas.height = this.canvas.height;
+   347→        }
+   348→
+   349→        if (canvas.getContext == null) {
+   350→            if (canvas.localName !== "canvas") {
+   351→                throw (
+   352→                    "Element supplied for LGraphCanvas must be a <canvas> element, you passed a " +
+   353→                    canvas.localName
+   354→                );
+   355→            }
+   356→            throw "This browser doesn't support Canvas";
+   357→        }
+   358→
+   359→        const ctx = (this.ctx = canvas.getContext("2d"));
+   360→        if (ctx == null) {
+   361→            if (!canvas.webgl_enabled) {
+   362→                console.warn("This canvas seems to be WebGL, enabling WebGL renderer");
+   363→            }
+   364→            this.enableWebGL();
+   365→        }
+   366→
+   367→        if (!skip_events) {
+   368→            this.bindEvents();
+   369→        }
+   370→    }
+   371→
+   372→    /** enables WebGL rendering */
+   373→    enableWebGL() {
+   374→        if (typeof GL === "undefined") {
+   375→            throw "litegl.js must be included to use a WebGL canvas";
+   376→        }
+   377→        if (typeof enableWebGLCanvas === "undefined") {
+   378→            throw "webglCanvas.js must be included to use this feature";
+   379→        }
+   380→        this.gl = this.ctx = enableWebGLCanvas(this.canvas);
+   381→        this.ctx.webgl = true;
+   382→        this.bgcanvas = this.canvas;
+   383→        this.bgctx = this.gl;
+   384→        this.canvas.webgl_enabled = true;
+   385→    }
+   386→
+   387→    // ==================== EVENT BINDING ====================
+   388→
+   389→    /** binds mouse, keyboard, touch and drag events to the canvas */
+   390→    bindEvents() {
+   391→        if (this._events_binded) {
+   392→            console.warn("LGraphCanvas: events already binded");
+   393→            return;
+   394→        }
+   395→
+   396→        const canvas = this.canvas;
+   397→        const ref_window = this.getCanvasWindow();
+   398→        const doc = ref_window.document;
+   399→
+   400→        this._mousedown_callback = this.processMouseDown.bind(this);
+   401→        this._mousewheel_callback = this.processMouseWheel.bind(this);
+   402→        this._mousemove_callback = this.processMouseMove.bind(this);
+   403→        this._mouseup_callback = this.processMouseUp.bind(this);
+   404→
+   405→        pointerListenerAdd(canvas, "down", this._mousedown_callback, true);
+   406→        canvas.addEventListener("mousewheel", this._mousewheel_callback, false);
+   407→        pointerListenerAdd(canvas, "up", this._mouseup_callback, true);
+   408→        pointerListenerAdd(canvas, "move", this._mousemove_callback);
+   409→
+   410→        canvas.addEventListener("contextmenu", this._doNothing);
+   411→        canvas.addEventListener(
+   412→            "DOMMouseScroll",
+   413→            this._mousewheel_callback,
+   414→            false
+   415→        );
+   416→
+   417→        // Keyboard
+   418→        this._key_callback = this.processKey.bind(this);
+   419→        canvas.setAttribute("tabindex", 1);
+   420→        canvas.addEventListener("keydown", this._key_callback, true);
+   421→        doc.addEventListener("keyup", this._key_callback, true);
+   422→
+   423→        // Drop
+   424→        this._ondrop_callback = this.processDrop.bind(this);
+   425→        canvas.addEventListener("dragover", this._doNothing, false);
+   426→        canvas.addEventListener("dragend", this._doNothing, false);
+   427→        canvas.addEventListener("drop", this._ondrop_callback, false);
+   428→        canvas.addEventListener("dragenter", this._doReturnTrue, false);
+   429→
+   430→        this._events_binded = true;
+   431→    }
+   432→
+   433→    /** unbinds mouse events from the canvas */
+   434→    unbindEvents() {
+   435→        if (!this._events_binded) {
+   436→            console.warn("LGraphCanvas: no events binded");
+   437→            return;
+   438→        }
+   439→
+   440→        const ref_window = this.getCanvasWindow();
+   441→        const doc = ref_window.document;
+   442→
+   443→        pointerListenerRemove(this.canvas, "move", this._mousemove_callback);
+   444→        pointerListenerRemove(this.canvas, "up", this._mouseup_callback);
+   445→        pointerListenerRemove(this.canvas, "down", this._mousedown_callback);
+   446→        this.canvas.removeEventListener("mousewheel", this._mousewheel_callback);
+   447→        this.canvas.removeEventListener(
+   448→            "DOMMouseScroll",
+   449→            this._mousewheel_callback
+   450→        );
+   451→        this.canvas.removeEventListener("keydown", this._key_callback);
+   452→        doc.removeEventListener("keyup", this._key_callback);
+   453→        this.canvas.removeEventListener("contextmenu", this._doNothing);
+   454→        this.canvas.removeEventListener("drop", this._ondrop_callback);
+   455→        this.canvas.removeEventListener("dragenter", this._doReturnTrue);
+   456→
+   457→        this._mousedown_callback = null;
+   458→        this._mousewheel_callback = null;
+   459→        this._key_callback = null;
+   460→        this._ondrop_callback = null;
+   461→
+   462→        this._events_binded = false;
+   463→    }
+   464→
+   465→    // used to block/capture events
+   466→    _doNothing(e) {
+   467→        e.preventDefault();
+   468→        return false;
+   469→    }
+   470→
+   471→    _doReturnTrue(e) {
+   472→        e.preventDefault();
+   473→        return true;
+   474→    }
+   475→
+   476→    /** used to block future mouse events (because of imgui) */
+   477→    blockClick() {
+   478→        this.block_click = true;
+   479→        this.last_mouseclick = 0;
+   480→    }
+   481→
+   482→    // ==================== RENDERING LOOP ====================
+   483→
+   484→    /** marks as dirty the canvas */
+   485→    setDirty(fgcanvas, bgcanvas) {
+   486→        if (fgcanvas) this.dirty_canvas = true;
+   487→        if (bgcanvas) this.dirty_bgcanvas = true;
+   488→    }
+   489→
+   490→    /** returns the window where the canvas is attached */
+   491→    getCanvasWindow() {
+   492→        if (!this.canvas) return window;
+   493→        const doc = this.canvas.ownerDocument;
+   494→        return doc.defaultView || doc.parentWindow;
+   495→    }
+   496→
+   497→    /** starts rendering the content of the canvas when needed */
+   498→    startRendering() {
+   499→        if (this.is_rendering) return;
+   500→
+   501→        this.is_rendering = true;
+   502→        const renderFrame = () => {
+   503→            if (!this.pause_rendering) {
+   504→                this.draw();
+   505→            }
+   506→            const win = this.getCanvasWindow();
+   507→            if (this.is_rendering) {
+   508→                win.requestAnimationFrame(renderFrame.bind(this));
+   509→            }
+   510→        };
+   511→        renderFrame.call(this);
+   512→    }
+   513→
+   514→    /** stops rendering the content of the canvas */
+   515→    stopRendering() {
+   516→        this.is_rendering = false;
+   517→    }
+   518→
+   519→    // ==================== MOUSE HANDLING ====================
+   520→
+   521→    processMouseDown(e) {
+   522→        if (this.set_canvas_dirty_on_mouse_event) this.dirty_canvas = true;
+   523→
+   524→        if (!this.graph) return;
+   525→
+   526→        this.adjustMouseEvent(e);
+   527→
+   528→        const ref_window = this.getCanvasWindow();
+   529→        LGraphCanvas.active_canvas = this;
+   530→
+   531→        const x = e.clientX;
+   532→        const y = e.clientY;
+   533→
+   534→        this.ds.viewport = this.viewport;
+   535→        const is_inside =
+   536→            !this.viewport ||
+   537→            (this.viewport &&
+   538→                x >= this.viewport[0] &&
+   539→                x < this.viewport[0] + this.viewport[2] &&
+   540→                y >= this.viewport[1] &&
+   541→                y < this.viewport[1] + this.viewport[3]);
+   542→
+   543→        // move mouse move event to the window in case it drags outside of the canvas
+   544→        if (!this.options.skip_events) {
+   545→            pointerListenerRemove(this.canvas, "move", this._mousemove_callback);
+   546→            pointerListenerAdd(
+   547→                ref_window.document,
+   548→                "move",
+   549→                this._mousemove_callback,
+   550→                true
+   551→            );
+   552→            pointerListenerAdd(
+   553→                ref_window.document,
+   554→                "up",
+   555→                this._mouseup_callback,
+   556→                true
+   557→            );
+   558→        }
+   559→
+   560→        if (!is_inside) return;
+   561→
+   562→        let node = this.graph.getNodeOnPos(
+   563→            e.canvasX,
+   564→            e.canvasY,
+   565→            this.visible_nodes,
+   566→            5
+   567→        );
+   568→        let skip_dragging = false;
+   569→        let skip_action = false;
+   570→        const now = getTime();
+   571→        const is_primary = e.isPrimary === undefined || !e.isPrimary;
+   572→        const is_double_click =
+   573→            now - this.last_mouseclick < 300 && is_primary;
+   574→
+   575→        this.mouse[0] = e.clientX;
+   576→        this.mouse[1] = e.clientY;
+   577→        this.graph_mouse[0] = e.canvasX;
+   578→        this.graph_mouse[1] = e.canvasY;
+   579→        this.last_click_position = [this.mouse[0], this.mouse[1]];
+   580→
+   581→        if (this.pointer_is_down && is_primary) {
+   582→            this.pointer_is_double = true;
+   583→        } else {
+   584→            this.pointer_is_double = false;
+   585→        }
+   586→        this.pointer_is_down = true;
+   587→
+   588→        this.canvas.focus();
+   589→
+   590→        LiteGraph.closeAllContextMenus(ref_window);
+   591→
+   592→        if (this.onMouse) {
+   593→            if (this.onMouse(e) === true) return;
+   594→        }
+   595→
+   596→        // LEFT BUTTON / single finger
+   597→        if (getMouseButton(e) === 1 && !this.pointer_is_double) {
+   598→            if (e.ctrlKey) {
+   599→                this.dragging_rectangle = new Float32Array(4);
+   600→                this.dragging_rectangle[0] = e.canvasX;
+   601→                this.dragging_rectangle[1] = e.canvasY;
+   602→                this.dragging_rectangle[2] = 1;
+   603→                this.dragging_rectangle[3] = 1;
+   604→                skip_action = true;
+   605→            }
+   606→
+   607→            // clone node ALT dragging
+   608→            if (
+   609→                LiteGraph.alt_drag_do_clone_nodes &&
+   610→                e.altKey &&
+   611→                node &&
+   612→                this.allow_interaction &&
+   613→                !skip_action &&
+   614→                !this.read_only
+   615→            ) {
+   616→                const cloned = node.clone();
+   617→                if (cloned) {
+   618→                    cloned.pos[0] += 5;
+   619→                    cloned.pos[1] += 5;
+   620→                    this.graph.add(cloned, false, { doCalcSize: false });
+   621→                    node = cloned;
+   622→                    skip_action = true;
+   623→                    if (this.allow_dragnodes) {
+   624→                        this.graph.beforeChange();
+   625→                        this.node_dragged = node;
+   626→                    }
+   627→                    if (!this.selected_nodes[node.id]) {
+   628→                        this.processNodeSelected(node, e);
+   629→                    }
+   630→                }
+   631→            }
+   632→
+   633→            let clicking_canvas_bg = false;
+   634→
+   635→            // when clicked on top of a node and it is not interactive
+   636→            if (
+   637→                node &&
+   638→                (this.allow_interaction || node.flags.allow_interaction) &&
+   639→                !skip_action &&
+   640→                !this.read_only
+   641→            ) {
+   642→                if (!this.live_mode && !node.flags.pinned) {
+   643→                    this.bringToFront(node);
+   644→                }
+   645→
+   646→                // not dragging mouse to connect two slots
+   647→                if (
+   648→                    this.allow_interaction &&
+   649→                    !this.connecting_node &&
+   650→                    !node.flags.collapsed &&
+   651→                    !this.live_mode
+   652→                ) {
+   653→                    // Search for corner for resize
+   654→                    if (
+   655→                        !skip_action &&
+   656→                        node.resizable !== false &&
+   657→                        isInsideRectangle(
+   658→                            e.canvasX,
+   659→                            e.canvasY,
+   660→                            node.pos[0] + node.size[0] - 5,
+   661→                            node.pos[1] + node.size[1] - 5,
+   662→                            10,
+   663→                            10
+   664→                        )
+   665→                    ) {
+   666→                        this.graph.beforeChange();
+   667→                        this.resizing_node = node;
+   668→                        this.canvas.style.cursor = "se-resize";
+   669→                        skip_action = true;
+   670→                    } else {
+   671→                        // search for outputs
+   672→                        if (node.outputs) {
+   673→                            for (
+   674→                                let i = 0, l = node.outputs.length;
+   675→                                i < l;
+   676→                                ++i
+   677→                            ) {
+   678→                                const output = node.outputs[i];
+   679→                                const link_pos = node.getConnectionPos(false, i);
+   680→                                if (
+   681→                                    isInsideRectangle(
+   682→                                        e.canvasX,
+   683→                                        e.canvasY,
+   684→                                        link_pos[0] - 15,
+   685→                                        link_pos[1] - 10,
+   686→                                        30,
+   687→                                        20
+   688→                                    )
+   689→                                ) {
+   690→                                    this.connecting_node = node;
+   691→                                    this.connecting_output = output;
+   692→                                    this.connecting_output.slot_index = i;
+   693→                                    this.connecting_pos =
+   694→                                        node.getConnectionPos(false, i);
+   695→                                    this.connecting_slot = i;
+   696→
+   697→                                    if (LiteGraph.shift_click_do_break_link_from) {
+   698→                                        if (e.shiftKey) {
+   699→                                            node.disconnectOutput(i);
+   700→                                        }
+   701→                                    }
+   702→
+   703→                                    if (is_double_click) {
+   704→                                        if (node.onOutputDblClick) {
+   705→                                            node.onOutputDblClick(i, e);
+   706→                                        }
+   707→                                    } else {
+   708→                                        if (node.onOutputClick) {
+   709→                                            node.onOutputClick(i, e);
+   710→                                        }
+   711→                                    }
+   712→
+   713→                                    skip_action = true;
+   714→                                    break;
+   715→                                }
+   716→                            }
+   717→                        }
+   718→
+   719→                        // search for inputs
+   720→                        if (node.inputs) {
+   721→                            for (
+   722→                                let i = 0, l = node.inputs.length;
+   723→                                i < l;
+   724→                                ++i
+   725→                            ) {
+   726→                                const input = node.inputs[i];
+   727→                                const link_pos = node.getConnectionPos(true, i);
+   728→                                if (
+   729→                                    isInsideRectangle(
+   730→                                        e.canvasX,
+   731→                                        e.canvasY,
+   732→                                        link_pos[0] - 15,
+   733→                                        link_pos[1] - 10,
+   734→                                        30,
+   735→                                        20
+   736→                                    )
+   737→                                ) {
+   738→                                    if (is_double_click) {
+   739→                                        if (node.onInputDblClick) {
+   740→                                            node.onInputDblClick(i, e);
+   741→                                        }
+   742→                                    } else {
+   743→                                        if (node.onInputClick) {
+   744→                                            node.onInputClick(i, e);
+   745→                                        }
+   746→                                    }
+   747→
+   748→                                    if (input.link !== null) {
+   749→                                        const link_info =
+   750→                                            this.graph.links[input.link];
+   751→                                        if (LiteGraph.click_do_break_link_to) {
+   752→                                            node.disconnectInput(i);
+   753→                                            this.dirty_bgcanvas = true;
+   754→                                            skip_action = true;
+   755→                                        }
+   756→
+   757→                                        if (
+   758→                                            this.allow_reconnect_links ||
+   759→                                            e.shiftKey
+   760→                                        ) {
+   761→                                            if (!LiteGraph.click_do_break_link_to) {
+   762→                                                node.disconnectInput(i);
+   763→                                            }
+   764→                                            this.connecting_node =
+   765→                                                this.graph._nodes_by_id[
+   766→                                                    link_info.origin_id
+   767→                                                ];
+   768→                                            this.connecting_slot =
+   769→                                                link_info.origin_slot;
+   770→                                            this.connecting_output =
+   771→                                                this.connecting_node.outputs[
+   772→                                                    this.connecting_slot
+   773→                                                ];
+   774→                                            this.connecting_pos =
+   775→                                                this.connecting_node.getConnectionPos(
+   776→                                                    false,
+   777→                                                    this.connecting_slot
+   778→                                                );
+   779→
+   780→                                            this.dirty_bgcanvas = true;
+   781→                                            skip_action = true;
+   782→                                        }
+   783→                                    }
+   784→
+   785→                                    if (!skip_action) {
+   786→                                        this.connecting_node = node;
+   787→                                        this.connecting_input = input;
+   788→                                        this.connecting_input.slot_index = i;
+   789→                                        this.connecting_pos =
+   790→                                            node.getConnectionPos(true, i);
+   791→                                        this.connecting_slot = i;
+   792→
+   793→                                        this.dirty_bgcanvas = true;
+   794→                                        skip_action = true;
+   795→                                    }
+   796→                                }
+   797→                            }
+   798→                        }
+   799→                    }
+   800→                }
+   801→
+   802→                // it wasn't clicked on the links boxes
+   803→                if (!skip_action) {
+   804→                    let block_drag_node = false;
+   805→                    const pos = [
+   806→                        e.canvasX - node.pos[0],
+   807→                        e.canvasY - node.pos[1],
+   808→                    ];
+   809→
+   810→                    // widgets
+   811→                    const widget = this.processNodeWidgets(
+   812→                        node,
+   813→                        this.graph_mouse,
+   814→                        e
+   815→                    );
+   816→                    if (widget) {
+   817→                        block_drag_node = true;
+   818→                        this.node_widget = [node, widget];
+   819→                    }
+   820→
+   821→                    // double clicking
+   822→                    if (
+   823→                        this.allow_interaction &&
+   824→                        is_double_click &&
+   825→                        this.selected_nodes[node.id]
+   826→                    ) {
+   827→                        if (node.onDblClick) {
+   828→                            node.onDblClick(e, pos, this);
+   829→                        }
+   830→                        this.processNodeDblClicked(node);
+   831→                        block_drag_node = true;
+   832→                    }
+   833→
+   834→                    // if do not capture mouse
+   835→                    if (node.onMouseDown && node.onMouseDown(e, pos, this)) {
+   836→                        block_drag_node = true;
+   837→                    } else {
+   838→                        // open subgraph button
+   839→                        if (node.subgraph && !node.skip_subgraph_button) {
+   840→                            if (
+   841→                                !node.flags.collapsed &&
+   842→                                pos[0] >
+   843→                                    node.size[0] -
+   844→                                        LiteGraph.NODE_TITLE_HEIGHT &&
+   845→                                pos[1] < 0
+   846→                            ) {
+   847→                                setTimeout(() => {
+   848→                                    this.openSubgraph(node.subgraph);
+   849→                                }, 10);
+   850→                            }
+   851→                        }
+   852→
+   853→                        if (this.live_mode) {
+   854→                            clicking_canvas_bg = true;
+   855→                            block_drag_node = true;
+   856→                        }
+   857→                    }
+   858→
+   859→                    if (!block_drag_node) {
+   860→                        if (this.allow_dragnodes) {
+   861→                            this.graph.beforeChange();
+   862→                            this.node_dragged = node;
+   863→                        }
+   864→                        this.processNodeSelected(node, e);
+   865→                    } else {
+   866→                        if (!node.is_selected) this.processNodeSelected(node, e);
+   867→                    }
+   868→
+   869→                    this.dirty_canvas = true;
+   870→                }
+   871→            } else {
+   872→                // clicked outside of nodes
+   873→                if (!skip_action) {
+   874→                    // search for link connector
+   875→                    if (!this.read_only) {
+   876→                        for (
+   877→                            let i = 0;
+   878→                            i < this.visible_links.length;
+   879→                            ++i
+   880→                        ) {
+   881→                            const link = this.visible_links[i];
+   882→                            const center = link._pos;
+   883→                            if (
+   884→                                !center ||
+   885→                                e.canvasX < center[0] - 4 ||
+   886→                                e.canvasX > center[0] + 4 ||
+   887→                                e.canvasY < center[1] - 4 ||
+   888→                                e.canvasY > center[1] + 4
+   889→                            ) {
+   890→                                continue;
+   891→                            }
+   892→                            this.showLinkMenu(link, e);
+   893→                            this.over_link_center = null;
+   894→                            break;
+   895→                        }
+   896→                    }
+   897→
+   898→                    this.selected_group = this.graph.getGroupOnPos(
+   899→                        e.canvasX,
+   900→                        e.canvasY
+   901→                    );
+   902→                    this.selected_group_resizing = false;
+   903→                    if (this.selected_group && !this.read_only) {
+   904→                        if (e.ctrlKey) {
+   905→                            this.dragging_rectangle = null;
+   906→                        }
+   907→
+   908→                        const dist = distance(
+   909→                            [e.canvasX, e.canvasY],
+   910→                            [
+   911→                                this.selected_group.pos[0] +
+   912→                                    this.selected_group.size[0],
+   913→                                this.selected_group.pos[1] +
+   914→                                    this.selected_group.size[1],
+   915→                            ]
+   916→                        );
+   917→                        if (dist * this.ds.scale < 10) {
+   918→                            this.selected_group_resizing = true;
+   919→                        } else {
+   920→                            this.selected_group.recomputeInsideNodes();
+   921→                        }
+   922→                    }
+   923→
+   924→                    if (
+   925→                        is_double_click &&
+   926→                        !this.read_only &&
+   927→                        this.allow_searchbox
+   928→                    ) {
+   929→                        this.showSearchBox(e);
+   930→                        e.preventDefault();
+   931→                        e.stopPropagation();
+   932→                    }
+   933→
+   934→                    clicking_canvas_bg = true;
+   935→                }
+   936→            }
+   937→
+   938→            if (
+   939→                !skip_action &&
+   940→                clicking_canvas_bg &&
+   941→                this.allow_dragcanvas
+   942→            ) {
+   943→                this.dragging_canvas = true;
+   944→            }
+   945→        } else if (getMouseButton(e) === 2) {
+   946→            // MIDDLE BUTTON
+   947→            if (
+   948→                LiteGraph.middle_click_slot_add_default_node &&
+   949→                node &&
+   950→                this.allow_interaction &&
+   951→                !skip_action &&
+   952→                !this.read_only
+   953→            ) {
+   954→                if (
+   955→                    !this.connecting_node &&
+   956→                    !node.flags.collapsed &&
+   957→                    !this.live_mode
+   958→                ) {
+   959→                    let mClikSlot = false;
+   960→                    let mClikSlot_index = false;
+   961→                    let mClikSlot_isOut = false;
+   962→                    if (node.outputs) {
+   963→                        for (
+   964→                            let i = 0, l = node.outputs.length;
+   965→                            i < l;
+   966→                            ++i
+   967→                        ) {
+   968→                            const output = node.outputs[i];
+   969→                            const link_pos = node.getConnectionPos(false, i);
+   970→                            if (
+   971→                                isInsideRectangle(
+   972→                                    e.canvasX,
+   973→                                    e.canvasY,
+   974→                                    link_pos[0] - 15,
+   975→                                    link_pos[1] - 10,
+   976→                                    30,
+   977→                                    20
+   978→                                )
+   979→                            ) {
+   980→                                mClikSlot = output;
+   981→                                mClikSlot_index = i;
+   982→                                mClikSlot_isOut = true;
+   983→                                break;
+   984→                            }
+   985→                        }
+   986→                    }
+   987→                    if (node.inputs) {
+   988→                        for (
+   989→                            let i = 0, l = node.inputs.length;
+   990→                            i < l;
+   991→                            ++i
+   992→                        ) {
+   993→                            const input = node.inputs[i];
+   994→                            const link_pos = node.getConnectionPos(true, i);
+   995→                            if (
+   996→                                isInsideRectangle(
+   997→                                    e.canvasX,
+   998→                                    e.canvasY,
+   999→                                    link_pos[0] - 15,
+  1000→                                    link_pos[1] - 10,
+  1001→                                    30,
+  1002→                                    20
+  1003→                                )
+  1004→                            ) {
+  1005→                                mClikSlot = input;
+  1006→                                mClikSlot_index = i;
+  1007→                                mClikSlot_isOut = false;
+  1008→                                break;
+  1009→                            }
+  1010→                        }
+  1011→                    }
+  1012→                    if (mClikSlot && mClikSlot_index !== false) {
+  1013→                        const node_bounding = node.getBounding();
+  1014→                        const posRef = [
+  1015→                            !mClikSlot_isOut
+  1016→                                ? node_bounding[0]
+  1017→                                : node_bounding[0] + node_bounding[2],
+  1018→                            e.canvasY - 80,
+  1019→                        ];
+  1020→                        this.createDefaultNodeForSlot({
+  1021→                            nodeFrom: !mClikSlot_isOut ? null : node,
+  1022→                            slotFrom: !mClikSlot_isOut ? null : mClikSlot_index,
+  1023→                            nodeTo: !mClikSlot_isOut ? node : null,
+  1024→                            slotTo: !mClikSlot_isOut ? mClikSlot_index : null,
+  1025→                            position: posRef,
+  1026→                            nodeType: "AUTO",
+  1027→                            posAdd: [!mClikSlot_isOut ? -30 : 30, 0],
+  1028→                            posSizeFix: [!mClikSlot_isOut ? -1 : 0, 0],
+  1029→                        });
+  1030→                    }
+  1031→                }
+  1032→            } else if (!skip_action && this.allow_dragcanvas) {
+  1033→                this.dragging_canvas = true;
+  1034→            }
+  1035→        } else if (getMouseButton(e) === 3 || this.pointer_is_double) {
+  1036→            // RIGHT BUTTON
+  1037→            if (
+  1038→                this.allow_interaction &&
+  1039→                !skip_action &&
+  1040→                !this.read_only
+  1041→            ) {
+  1042→                if (node) {
+  1043→                    if (
+  1044→                        Object.keys(this.selected_nodes).length &&
+  1045→                        (this.selected_nodes[node.id] ||
+  1046→                            e.shiftKey ||
+  1047→                            e.ctrlKey ||
+  1048→                            e.metaKey)
+  1049→                    ) {
+  1050→                        if (!this.selected_nodes[node.id])
+  1051→                            this.selectNodes([node], true);
+  1052→                    } else {
+  1053→                        this.selectNodes([node]);
+  1054→                    }
+  1055→                }
+  1056→
+  1057→                this.processContextMenu(node, e);
+  1058→            }
+  1059→        }
+  1060→
+  1061→        this.last_mouse[0] = e.clientX;
+  1062→        this.last_mouse[1] = e.clientY;
+  1063→        this.last_mouseclick = getTime();
+  1064→        this.last_mouse_dragging = true;
+  1065→
+  1066→        this.graph.change();
+  1067→
+  1068→        if (
+  1069→            !ref_window.document.activeElement ||
+  1070→            (ref_window.document.activeElement.nodeName.toLowerCase() !==
+  1071→                "input" &&
+  1072→                ref_window.document.activeElement.nodeName.toLowerCase() !==
+  1073→                    "textarea")
+  1074→        ) {
+  1075→            e.preventDefault();
+  1076→        }
+  1077→        e.stopPropagation();
+  1078→
+  1079→        if (this.onMouseDown) {
+  1080→            this.onMouseDown(e);
+  1081→        }
+  1082→
+  1083→        return false;
+  1084→    }
+  1085→
+  1086→    processMouseMove(e) {
+  1087→        if (this.autoresize) {
+  1088→            this.resize();
+  1089→        }
+  1090→
+  1091→        if (this.set_canvas_dirty_on_mouse_event) this.dirty_canvas = true;
+  1092→
+  1093→        if (!this.graph) return;
+  1094→
+  1095→        LGraphCanvas.active_canvas = this;
+  1096→        this.adjustMouseEvent(e);
+  1097→        const mouse = [e.clientX, e.clientY];
+  1098→        this.mouse[0] = mouse[0];
+  1099→        this.mouse[1] = mouse[1];
+  1100→        const delta = [
+  1101→            mouse[0] - this.last_mouse[0],
+  1102→            mouse[1] - this.last_mouse[1],
+  1103→        ];
+  1104→        this.last_mouse = mouse;
+  1105→        this.graph_mouse[0] = e.canvasX;
+  1106→        this.graph_mouse[1] = e.canvasY;
+  1107→
+  1108→        if (this.block_click) {
+  1109→            e.preventDefault();
+  1110→            return false;
+  1111→        }
+  1112→
+  1113→        e.dragging = this.last_mouse_dragging;
+  1114→
+  1115→        if (this.node_widget) {
+  1116→            this.processNodeWidgets(
+  1117→                this.node_widget[0],
+  1118→                this.graph_mouse,
+  1119→                e,
+  1120→                this.node_widget[1]
+  1121→            );
+  1122→            this.dirty_canvas = true;
+  1123→        }
+  1124→
+  1125→        // get node over
+  1126→        const node = this.graph.getNodeOnPos(
+  1127→            e.canvasX,
+  1128→            e.canvasY,
+  1129→            this.visible_nodes
+  1130→        );
+  1131→
+  1132→        if (this.dragging_rectangle) {
+  1133→            this.dragging_rectangle[2] =
+  1134→                e.canvasX - this.dragging_rectangle[0];
+  1135→            this.dragging_rectangle[3] =
+  1136→                e.canvasY - this.dragging_rectangle[1];
+  1137→            this.dirty_canvas = true;
+  1138→        } else if (this.selected_group && !this.read_only) {
+  1139→            if (this.selected_group_resizing) {
+  1140→                this.selected_group.size = [
+  1141→                    e.canvasX - this.selected_group.pos[0],
+  1142→                    e.canvasY - this.selected_group.pos[1],
+  1143→                ];
+  1144→            } else {
+  1145→                const deltax = delta[0] / this.ds.scale;
+  1146→                const deltay = delta[1] / this.ds.scale;
+  1147→                this.selected_group.move(deltax, deltay, e.ctrlKey);
+  1148→                if (this.selected_group._nodes.length) {
+  1149→                    this.dirty_canvas = true;
+  1150→                }
+  1151→            }
+  1152→            this.dirty_bgcanvas = true;
+  1153→        } else if (this.dragging_canvas) {
+  1154→            this.ds.offset[0] += delta[0] / this.ds.scale;
+  1155→            this.ds.offset[1] += delta[1] / this.ds.scale;
+  1156→            this.dirty_canvas = true;
+  1157→            this.dirty_bgcanvas = true;
+  1158→        } else if (
+  1159→            (this.allow_interaction ||
+  1160→                (node && node.flags.allow_interaction)) &&
+  1161→            !this.read_only
+  1162→        ) {
+  1163→            if (this.connecting_node) {
+  1164→                this.dirty_canvas = true;
+  1165→            }
+  1166→
+  1167→            // remove mouseover flag
+  1168→            for (
+  1169→                let i = 0, l = this.graph._nodes.length;
+  1170→                i < l;
+  1171→                ++i
+  1172→            ) {
+  1173→                if (
+  1174→                    this.graph._nodes[i].mouseOver &&
+  1175→                    node !== this.graph._nodes[i]
+  1176→                ) {
+  1177→                    this.graph._nodes[i].mouseOver = false;
+  1178→                    if (this.node_over && this.node_over.onMouseLeave) {
+  1179→                        this.node_over.onMouseLeave(e);
+  1180→                    }
+  1181→                    this.node_over = null;
+  1182→                    this.dirty_canvas = true;
+  1183→                }
+  1184→            }
+  1185→
+  1186→            // mouse over a node
+  1187→            if (node) {
+  1188→                if (node.redraw_on_mouse) this.dirty_canvas = true;
+  1189→
+  1190→                if (!node.mouseOver) {
+  1191→                    node.mouseOver = true;
+  1192→                    this.node_over = node;
+  1193→                    this.dirty_canvas = true;
+  1194→                    if (node.onMouseEnter) {
+  1195→                        node.onMouseEnter(e);
+  1196→                    }
+  1197→                }
+  1198→
+  1199→                if (node.onMouseMove) {
+  1200→                    node.onMouseMove(e, [
+  1201→                        e.canvasX - node.pos[0],
+  1202→                        e.canvasY - node.pos[1],
+  1203→                    ], this);
+  1204→                }
+  1205→
+  1206→                // if dragging a link
+  1207→                if (this.connecting_node) {
+  1208→                    if (this.connecting_output) {
+  1209→                        const pos =
+  1210→                            this._highlight_input || [0, 0];
+  1211→
+  1212→                        if (this.isOverNodeBox(node, e.canvasX, e.canvasY)) {
+  1213→                            // mouse on top of the corner box
+  1214→                        } else {
+  1215→                            const slot = this.isOverNodeInput(
+  1216→                                node,
+  1217→                                e.canvasX,
+  1218→                                e.canvasY,
+  1219→                                pos
+  1220→                            );
+  1221→                            if (slot !== -1 && node.inputs[slot]) {
+  1222→                                const slot_type = node.inputs[slot].type;
+  1223→                                if (
+  1224→                                    LiteGraph.isValidConnection(
+  1225→                                        this.connecting_output.type,
+  1226→                                        slot_type
+  1227→                                    )
+  1228→                                ) {
+  1229→                                    this._highlight_input = pos;
+  1230→                                    this._highlight_input_slot =
+  1231→                                        node.inputs[slot];
+  1232→                                }
+  1233→                            } else {
+  1234→                                this._highlight_input = null;
+  1235→                                this._highlight_input_slot = null;
+  1236→                            }
+  1237→                        }
+  1238→                    } else if (this.connecting_input) {
+  1239→                        const pos =
+  1240→                            this._highlight_output || [0, 0];
+  1241→
+  1242→                        if (this.isOverNodeBox(node, e.canvasX, e.canvasY)) {
+  1243→                            // mouse on top of the corner box
+  1244→                        } else {
+  1245→                            const slot = this.isOverNodeOutput(
+  1246→                                node,
+  1247→                                e.canvasX,
+  1248→                                e.canvasY,
+  1249→                                pos
+  1250→                            );
+  1251→                            if (slot !== -1 && node.outputs[slot]) {
+  1252→                                const slot_type = node.outputs[slot].type;
+  1253→                                if (
+  1254→                                    LiteGraph.isValidConnection(
+  1255→                                        this.connecting_input.type,
+  1256→                                        slot_type
+  1257→                                    )
+  1258→                                ) {
+  1259→                                    this._highlight_output = pos;
+  1260→                                }
+  1261→                            } else {
+  1262→                                this._highlight_output = null;
+  1263→                            }
+  1264→                        }
+  1265→                    }
+  1266→                }
+  1267→
+  1268→                // Search for corner
+  1269→                if (this.canvas) {
+  1270→                    if (
+  1271→                        isInsideRectangle(
+  1272→                            e.canvasX,
+  1273→                            e.canvasY,
+  1274→                            node.pos[0] + node.size[0] - 5,
+  1275→                            node.pos[1] + node.size[1] - 5,
+  1276→                            5,
+  1277→                            5
+  1278→                        )
+  1279→                    ) {
+  1280→                        this.canvas.style.cursor = "se-resize";
+  1281→                    } else {
+  1282→                        this.canvas.style.cursor = "crosshair";
+  1283→                    }
+  1284→                }
+  1285→            } else {
+  1286→                // not over a node — search for link connector
+  1287→                let over_link = null;
+  1288→                for (let i = 0; i < this.visible_links.length; ++i) {
+  1289→                    const link = this.visible_links[i];
+  1290→                    const center = link._pos;
+  1291→                    if (
+  1292→                        !center ||
+  1293→                        e.canvasX < center[0] - 4 ||
+  1294→                        e.canvasX > center[0] + 4 ||
+  1295→                        e.canvasY < center[1] - 4 ||
+  1296→                        e.canvasY > center[1] + 4
+  1297→                    ) {
+  1298→                        continue;
+  1299→                    }
+  1300→                    over_link = link;
+  1301→                    break;
+  1302→                }
+  1303→                if (over_link !== this.over_link_center) {
+  1304→                    this.over_link_center = over_link;
+  1305→                    this.dirty_canvas = true;
+  1306→                }
+  1307→
+  1308→                if (this.canvas) {
+  1309→                    this.canvas.style.cursor = "";
+  1310→                }
+  1311→            }
+  1312→
+  1313→            // send event to node if capturing input
+  1314→            if (
+  1315→                this.node_capturing_input &&
+  1316→                this.node_capturing_input !== node &&
+  1317→                this.node_capturing_input.onMouseMove
+  1318→            ) {
+  1319→                this.node_capturing_input.onMouseMove(e, [
+  1320→                    e.canvasX - this.node_capturing_input.pos[0],
+  1321→                    e.canvasY - this.node_capturing_input.pos[1],
+  1322→                ], this);
+  1323→            }
+  1324→
+  1325→            // node being dragged
+  1326→            if (this.node_dragged && !this.live_mode) {
+  1327→                for (const i in this.selected_nodes) {
+  1328→                    const n = this.selected_nodes[i];
+  1329→                    n.pos[0] += delta[0] / this.ds.scale;
+  1330→                    n.pos[1] += delta[1] / this.ds.scale;
+  1331→                    if (!n.is_selected) this.processNodeSelected(n, e);
+  1332→                }
+  1333→
+  1334→                this.dirty_canvas = true;
+  1335→                this.dirty_bgcanvas = true;
+  1336→            }
+  1337→
+  1338→            if (this.resizing_node && !this.live_mode) {
+  1339→                const desired_size = [
+  1340→                    e.canvasX - this.resizing_node.pos[0],
+  1341→                    e.canvasY - this.resizing_node.pos[1],
+  1342→                ];
+  1343→                const min_size = this.resizing_node.computeSize();
+  1344→                desired_size[0] = Math.max(min_size[0], desired_size[0]);
+  1345→                desired_size[1] = Math.max(min_size[1], desired_size[1]);
+  1346→                this.resizing_node.setSize(desired_size);
+  1347→
+  1348→                this.canvas.style.cursor = "se-resize";
+  1349→                this.dirty_canvas = true;
+  1350→                this.dirty_bgcanvas = true;
+  1351→            }
+  1352→        }
+  1353→
+  1354→        e.preventDefault();
+  1355→        return false;
+  1356→    }
+  1357→
+  1358→    processMouseUp(e) {
+  1359→        const is_primary = e.isPrimary === undefined || e.isPrimary;
+  1360→
+  1361→        if (!is_primary) {
+  1362→            return false;
+  1363→        }
+  1364→
+  1365→        if (this.set_canvas_dirty_on_mouse_event) this.dirty_canvas = true;
+  1366→
+  1367→        if (!this.graph) return;
+  1368→
+  1369→        const win = this.getCanvasWindow();
+  1370→        const doc = win.document;
+  1371→        LGraphCanvas.active_canvas = this;
+  1372→
+  1373→        // restore the mousemove event back to the canvas
+  1374→        if (!this.options.skip_events) {
+  1375→            pointerListenerRemove(doc, "move", this._mousemove_callback, true);
+  1376→            pointerListenerAdd(this.canvas, "move", this._mousemove_callback, true);
+  1377→            pointerListenerRemove(doc, "up", this._mouseup_callback, true);
+  1378→        }
+  1379→
+  1380→        this.adjustMouseEvent(e);
+  1381→        const now = getTime();
+  1382→        e.click_time = now - this.last_mouseclick;
+  1383→        this.last_mouse_dragging = false;
+  1384→        this.last_click_position = null;
+  1385→
+  1386→        if (this.block_click) {
+  1387→            this.block_click = false;
+  1388→        }
+  1389→
+  1390→        if (getMouseButton(e) === 1) {
+  1391→            if (this.node_widget) {
+  1392→                this.processNodeWidgets(
+  1393→                    this.node_widget[0],
+  1394→                    this.graph_mouse,
+  1395→                    e
+  1396→                );
+  1397→            }
+  1398→
+  1399→            // left button
+  1400→            this.node_widget = null;
+  1401→
+  1402→            if (this.selected_group) {
+  1403→                const diffx =
+  1404→                    this.selected_group.pos[0] -
+  1405→                    Math.round(this.selected_group.pos[0]);
+  1406→                const diffy =
+  1407→                    this.selected_group.pos[1] -
+  1408→                    Math.round(this.selected_group.pos[1]);
+  1409→                this.selected_group.move(diffx, diffy, e.ctrlKey);
+  1410→                this.selected_group.pos[0] = Math.round(
+  1411→                    this.selected_group.pos[0]
+  1412→                );
+  1413→                this.selected_group.pos[1] = Math.round(
+  1414→                    this.selected_group.pos[1]
+  1415→                );
+  1416→                if (this.selected_group._nodes.length) {
+  1417→                    this.dirty_canvas = true;
+  1418→                }
+  1419→                this.selected_group = null;
+  1420→            }
+  1421→            this.selected_group_resizing = false;
+  1422→
+  1423→            const node = this.graph.getNodeOnPos(
+  1424→                e.canvasX,
+  1425→                e.canvasY,
+  1426→                this.visible_nodes
+  1427→            );
+  1428→
+  1429→            if (this.dragging_rectangle) {
+  1430→                if (this.graph) {
+  1431→                    const nodes = this.graph._nodes;
+  1432→                    const node_bounding = new Float32Array(4);
+  1433→
+  1434→                    const w = Math.abs(this.dragging_rectangle[2]);
+  1435→                    const h = Math.abs(this.dragging_rectangle[3]);
+  1436→                    const startx =
+  1437→                        this.dragging_rectangle[2] < 0
+  1438→                            ? this.dragging_rectangle[0] - w
+  1439→                            : this.dragging_rectangle[0];
+  1440→                    const starty =
+  1441→                        this.dragging_rectangle[3] < 0
+  1442→                            ? this.dragging_rectangle[1] - h
+  1443→                            : this.dragging_rectangle[1];
+  1444→                    this.dragging_rectangle[0] = startx;
+  1445→                    this.dragging_rectangle[1] = starty;
+  1446→                    this.dragging_rectangle[2] = w;
+  1447→                    this.dragging_rectangle[3] = h;
+  1448→
+  1449→                    if (!node || (w > 10 && h > 10)) {
+  1450→                        const to_select = [];
+  1451→                        for (let i = 0; i < nodes.length; ++i) {
+  1452→                            const nodeX = nodes[i];
+  1453→                            nodeX.getBounding(node_bounding);
+  1454→                            if (
+  1455→                                !overlapBounding(
+  1456→                                    this.dragging_rectangle,
+  1457→                                    node_bounding
+  1458→                                )
+  1459→                            ) {
+  1460→                                continue;
+  1461→                            }
+  1462→                            to_select.push(nodeX);
+  1463→                        }
+  1464→                        if (to_select.length) {
+  1465→                            this.selectNodes(to_select, e.shiftKey);
+  1466→                        }
+  1467→                    } else {
+  1468→                        this.selectNodes([node], e.shiftKey || e.ctrlKey);
+  1469→                    }
+  1470→                }
+  1471→                this.dragging_rectangle = null;
+  1472→            } else if (this.connecting_node) {
+  1473→                // dragging a connection
+  1474→                this.dirty_canvas = true;
+  1475→                this.dirty_bgcanvas = true;
+  1476→
+  1477→                const connInOrOut =
+  1478→                    this.connecting_output || this.connecting_input;
+  1479→                const connType = connInOrOut.type;
+  1480→
+  1481→                if (node) {
+  1482→                    if (this.connecting_output) {
+  1483→                        const slot = this.isOverNodeInput(
+  1484→                            node,
+  1485→                            e.canvasX,
+  1486→                            e.canvasY
+  1487→                        );
+  1488→                        if (slot !== -1) {
+  1489→                            this.connecting_node.connect(
+  1490→                                this.connecting_slot,
+  1491→                                node,
+  1492→                                slot
+  1493→                            );
+  1494→                        } else {
+  1495→                            this.connecting_node.connectByType(
+  1496→                                this.connecting_slot,
+  1497→                                node,
+  1498→                                connType
+  1499→                            );
+  1500→                        }
+  1501→                    } else if (this.connecting_input) {
+  1502→                        const slot = this.isOverNodeOutput(
+  1503→                            node,
+  1504→                            e.canvasX,
+  1505→                            e.canvasY
+  1506→                        );
+  1507→                        if (slot !== -1) {
+  1508→                            node.connect(
+  1509→                                slot,
+  1510→                                this.connecting_node,
+  1511→                                this.connecting_slot
+  1512→                            );
+  1513→                        } else {
+  1514→                            this.connecting_node.connectByTypeOutput(
+  1515→                                this.connecting_slot,
+  1516→                                node,
+  1517→                                connType
+  1518→                            );
+  1519→                        }
+  1520→                    }
+  1521→                } else {
+  1522→                    // add menu when releasing link in empty space
+  1523→                    if (LiteGraph.release_link_on_empty_shows_menu) {
+  1524→                        if (e.shiftKey && this.allow_searchbox) {
+  1525→                            if (this.connecting_output) {
+  1526→                                this.showSearchBox(e, {
+  1527→                                    node_from: this.connecting_node,
+  1528→                                    slot_from: this.connecting_output,
+  1529→                                    type_filter_in: this.connecting_output.type,
+  1530→                                });
+  1531→                            } else if (this.connecting_input) {
+  1532→                                this.showSearchBox(e, {
+  1533→                                    node_to: this.connecting_node,
+  1534→                                    slot_from: this.connecting_input,
+  1535→                                    type_filter_out: this.connecting_input.type,
+  1536→                                });
+  1537→                            }
+  1538→                        } else {
+  1539→                            if (this.connecting_output) {
+  1540→                                this.showConnectionMenu({
+  1541→                                    nodeFrom: this.connecting_node,
+  1542→                                    slotFrom: this.connecting_output,
+  1543→                                    e: e,
+  1544→                                });
+  1545→                            } else if (this.connecting_input) {
+  1546→                                this.showConnectionMenu({
+  1547→                                    nodeTo: this.connecting_node,
+  1548→                                    slotTo: this.connecting_input,
+  1549→                                    e: e,
+  1550→                                });
+  1551→                            }
+  1552→                        }
+  1553→                    }
+  1554→                }
+  1555→
+  1556→                this.connecting_output = null;
+  1557→                this.connecting_input = null;
+  1558→                this.connecting_pos = null;
+  1559→                this.connecting_node = null;
+  1560→                this.connecting_slot = -1;
+  1561→            } else if (this.resizing_node) {
+  1562→                this.dirty_canvas = true;
+  1563→                this.dirty_bgcanvas = true;
+  1564→                this.graph.afterChange(this.resizing_node);
+  1565→                this.resizing_node = null;
+  1566→            } else if (this.node_dragged) {
+  1567→                const draggedNode = this.node_dragged;
+  1568→                if (
+  1569→                    draggedNode &&
+  1570→                    e.click_time < 300 &&
+  1571→                    isInsideRectangle(
+  1572→                        e.canvasX,
+  1573→                        e.canvasY,
+  1574→                        draggedNode.pos[0],
+  1575→                        draggedNode.pos[1] - LiteGraph.NODE_TITLE_HEIGHT,
+  1576→                        LiteGraph.NODE_TITLE_HEIGHT,
+  1577→                        LiteGraph.NODE_TITLE_HEIGHT
+  1578→                    )
+  1579→                ) {
+  1580→                    draggedNode.collapse();
+  1581→                }
+  1582→
+  1583→                this.dirty_canvas = true;
+  1584→                this.dirty_bgcanvas = true;
+  1585→                this.node_dragged.pos[0] = Math.round(this.node_dragged.pos[0]);
+  1586→                this.node_dragged.pos[1] = Math.round(this.node_dragged.pos[1]);
+  1587→                if (
+  1588→                    this.graph.config.align_to_grid ||
+  1589→                    this.align_to_grid
+  1590→                ) {
+  1591→                    this.node_dragged.alignToGrid();
+  1592→                }
+  1593→                if (this.onNodeMoved) this.onNodeMoved(this.node_dragged);
+  1594→                this.graph.afterChange(this.node_dragged);
+  1595→                this.node_dragged = null;
+  1596→            } else {
+  1597→                // get node over
+  1598→                const nodeOver = this.graph.getNodeOnPos(
+  1599→                    e.canvasX,
+  1600→                    e.canvasY,
+  1601→                    this.visible_nodes
+  1602→                );
+  1603→
+  1604→                if (!nodeOver && e.click_time < 300) {
+  1605→                    this.deselectAllNodes();
+  1606→                }
+  1607→
+  1608→                this.dirty_canvas = true;
+  1609→                this.dragging_canvas = false;
+  1610→
+  1611→                if (this.node_over && this.node_over.onMouseUp) {
+  1612→                    this.node_over.onMouseUp(e, [
+  1613→                        e.canvasX - this.node_over.pos[0],
+  1614→                        e.canvasY - this.node_over.pos[1],
+  1615→                    ], this);
+  1616→                }
+  1617→                if (
+  1618→                    this.node_capturing_input &&
+  1619→                    this.node_capturing_input.onMouseUp
+  1620→                ) {
+  1621→                    this.node_capturing_input.onMouseUp(e, [
+  1622→                        e.canvasX - this.node_capturing_input.pos[0],
+  1623→                        e.canvasY - this.node_capturing_input.pos[1],
+  1624→                    ]);
+  1625→                }
+  1626→            }
+  1627→        } else if (getMouseButton(e) === 2) {
+  1628→            this.dirty_canvas = true;
+  1629→            this.dragging_canvas = false;
+  1630→        } else if (getMouseButton(e) === 3) {
+  1631→            this.dirty_canvas = true;
+  1632→            this.dragging_canvas = false;
+  1633→        }
+  1634→
+  1635→        if (is_primary) {
+  1636→            this.pointer_is_down = false;
+  1637→            this.pointer_is_double = false;
+  1638→        }
+  1639→
+  1640→        this.graph.change();
+  1641→
+  1642→        e.stopPropagation();
+  1643→        e.preventDefault();
+  1644→        return false;
+  1645→    }
+  1646→
+  1647→    processMouseWheel(e) {
+  1648→        if (!this.graph || !this.allow_dragcanvas) return;
+  1649→
+  1650→        const delta =
+  1651→            e.wheelDeltaY != null ? e.wheelDeltaY : e.detail * -60;
+  1652→
+  1653→        this.adjustMouseEvent(e);
+  1654→
+  1655→        const x = e.clientX;
+  1656→        const y = e.clientY;
+  1657→        const is_inside =
+  1658→            !this.viewport ||
+  1659→            (this.viewport &&
+  1660→                x >= this.viewport[0] &&
+  1661→                x < this.viewport[0] + this.viewport[2] &&
+  1662→                y >= this.viewport[1] &&
+  1663→                y < this.viewport[1] + this.viewport[3]);
+  1664→        if (!is_inside) return;
+  1665→
+  1666→        let scale = this.ds.scale;
+  1667→
+  1668→        if (delta > 0) {
+  1669→            scale *= 1.1;
+  1670→        } else if (delta < 0) {
+  1671→            scale *= 1 / 1.1;
+  1672→        }
+  1673→
+  1674→        this.ds.changeScale(scale, [e.clientX, e.clientY]);
+  1675→
+  1676→        this.graph.change();
+  1677→
+  1678→        e.preventDefault();
+  1679→        return false;
+  1680→    }
+  1681→
+  1682→    // ==================== KEYBOARD ====================
+  1683→
+  1684→    processKey(e) {
+  1685→        if (!this.graph) return;
+  1686→
+  1687→        let block_default = false;
+  1688→
+  1689→        if (e.target.localName === "input") return;
+  1690→
+  1691→        if (e.type === "keydown") {
+  1692→            // Tab — open search box
+  1693→            if (e.keyCode === 9 && this.allow_searchbox) {
+  1694→                e.preventDefault();
+  1695→                e.stopImmediatePropagation();
+  1696→                this.showSearchBox(e);
+  1697→                return false;
+  1698→            }
+  1699→
+  1700→            if (e.keyCode === 32) {
+  1701→                // space
+  1702→                this.dragging_canvas = true;
+  1703→                block_default = true;
+  1704→            }
+  1705→
+  1706→            if (e.keyCode === 27) {
+  1707→                // esc
+  1708→                if (this.node_panel) this.node_panel.close();
+  1709→                if (this.options_panel) this.options_panel.close();
+  1710→                block_default = true;
+  1711→            }
+  1712→
+  1713→            // select all Control A
+  1714→            if (e.keyCode === 65 && e.ctrlKey) {
+  1715→                this.selectNodes();
+  1716→                block_default = true;
+  1717→            }
+  1718→
+  1719→            if (e.keyCode === 67 && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+  1720→                // copy
+  1721→                if (this.selected_nodes) {
+  1722→                    this.copyToClipboard();
+  1723→                    block_default = true;
+  1724→                }
+  1725→            }
+  1726→
+  1727→            if (e.keyCode === 86 && (e.metaKey || e.ctrlKey)) {
+  1728→                // paste
+  1729→                this.pasteFromClipboard(e.shiftKey);
+  1730→            }
+  1731→
+  1732→            // delete or backspace
+  1733→            if (e.keyCode === 46 || e.keyCode === 8) {
+  1734→                if (
+  1735→                    e.target.localName !== "input" &&
+  1736→                    e.target.localName !== "textarea"
+  1737→                ) {
+  1738→                    this.deleteSelectedNodes();
+  1739→                    block_default = true;
+  1740→                }
+  1741→            }
+  1742→
+  1743→            if (this.selected_nodes) {
+  1744→                for (const i in this.selected_nodes) {
+  1745→                    if (this.selected_nodes[i].onKeyDown) {
+  1746→                        this.selected_nodes[i].onKeyDown(e);
+  1747→                    }
+  1748→                }
+  1749→            }
+  1750→        } else if (e.type === "keyup") {
+  1751→            if (e.keyCode === 32) {
+  1752→                this.dragging_canvas = false;
+  1753→            }
+  1754→
+  1755→            if (this.selected_nodes) {
+  1756→                for (const i in this.selected_nodes) {
+  1757→                    if (this.selected_nodes[i].onKeyUp) {
+  1758→                        this.selected_nodes[i].onKeyUp(e);
+  1759→                    }
+  1760→                }
+  1761→            }
+  1762→        }
+  1763→
+  1764→        this.graph.change();
+  1765→
+  1766→        if (block_default) {
+  1767→            e.preventDefault();
+  1768→            e.stopImmediatePropagation();
+  1769→            return false;
+  1770→        }
+  1771→    }
+  1772→
+  1773→    // ==================== CLIPBOARD ====================
+  1774→
+  1775→    copyToClipboard() {
+  1776→        const clipboard_info = {
+  1777→            nodes: [],
+  1778→            links: [],
+  1779→        };
+  1780→        let index = 0;
+  1781→        const selected_nodes_array = [];
+  1782→        for (const i in this.selected_nodes) {
+  1783→            const node = this.selected_nodes[i];
+  1784→            if (node.clonable === false) continue;
+  1785→            node._relative_id = index;
+  1786→            selected_nodes_array.push(node);
+  1787→            index += 1;
+  1788→        }
+  1789→
+  1790→        for (let i = 0; i < selected_nodes_array.length; ++i) {
+  1791→            const node = selected_nodes_array[i];
+  1792→            if (node.clonable === false) continue;
+  1793→            const cloned = node.clone();
+  1794→            if (!cloned) {
+  1795→                console.warn("node type not found: " + node.type);
+  1796→                continue;
+  1797→            }
+  1798→            clipboard_info.nodes.push(cloned.serialize());
+  1799→            if (node.inputs && node.inputs.length) {
+  1800→                for (let j = 0; j < node.inputs.length; ++j) {
+  1801→                    const input = node.inputs[j];
+  1802→                    if (!input || input.link == null) continue;
+  1803→                    const link_info = this.graph.links[input.link];
+  1804→                    if (!link_info) continue;
+  1805→                    const target_node = this.graph.getNodeById(
+  1806→                        link_info.origin_id
+  1807→                    );
+  1808→                    if (!target_node) continue;
+  1809→                    clipboard_info.links.push([
+  1810→                        target_node._relative_id,
+  1811→                        link_info.origin_slot,
+  1812→                        node._relative_id,
+  1813→                        link_info.target_slot,
+  1814→                        target_node.id,
+  1815→                    ]);
+  1816→                }
+  1817→            }
+  1818→        }
+  1819→        localStorage.setItem(
+  1820→            "litegrapheditor_clipboard",
+  1821→            JSON.stringify(clipboard_info)
+  1822→        );
+  1823→    }
+  1824→
+  1825→    pasteFromClipboard(isConnectUnselected = false) {
+  1826→        if (
+  1827→            !LiteGraph.ctrl_shift_v_paste_connect_unselected_outputs &&
+  1828→            isConnectUnselected
+  1829→        ) {
+  1830→            return;
+  1831→        }
+  1832→        const data = localStorage.getItem("litegrapheditor_clipboard");
+  1833→        if (!data) return;
+  1834→
+  1835→        this.graph.beforeChange();
+  1836→
+  1837→        const clipboard_info = JSON.parse(data);
+  1838→        let posMin = false;
+  1839→        for (let i = 0; i < clipboard_info.nodes.length; ++i) {
+  1840→            if (posMin) {
+  1841→                if (posMin[0] > clipboard_info.nodes[i].pos[0])
+  1842→                    posMin[0] = clipboard_info.nodes[i].pos[0];
+  1843→                if (posMin[1] > clipboard_info.nodes[i].pos[1])
+  1844→                    posMin[1] = clipboard_info.nodes[i].pos[1];
+  1845→            } else {
+  1846→                posMin = [
+  1847→                    clipboard_info.nodes[i].pos[0],
+  1848→                    clipboard_info.nodes[i].pos[1],
+  1849→                ];
+  1850→            }
+  1851→        }
+  1852→        const nodes = [];
+  1853→        for (let i = 0; i < clipboard_info.nodes.length; ++i) {
+  1854→            const node_data = clipboard_info.nodes[i];
+  1855→            const node = LiteGraph.createNode(node_data.type);
+  1856→            if (node) {
+  1857→                node.configure(node_data);
+  1858→                node.pos[0] += this.graph_mouse[0] - posMin[0];
+  1859→                node.pos[1] += this.graph_mouse[1] - posMin[1];
+  1860→                this.graph.add(node, { doProcessChange: false });
+  1861→                nodes.push(node);
+  1862→            }
+  1863→        }
+  1864→
+  1865→        // create links
+  1866→        for (let i = 0; i < clipboard_info.links.length; ++i) {
+  1867→            const link_info = clipboard_info.links[i];
+  1868→            let origin_node;
+  1869→            const origin_node_relative_id = link_info[0];
+  1870→            if (origin_node_relative_id != null) {
+  1871→                origin_node = nodes[origin_node_relative_id];
+  1872→            } else if (
+  1873→                LiteGraph.ctrl_shift_v_paste_connect_unselected_outputs &&
+  1874→                isConnectUnselected
+  1875→            ) {
+  1876→                const origin_node_id = link_info[4];
+  1877→                if (origin_node_id) {
+  1878→                    origin_node = this.graph.getNodeById(origin_node_id);
+  1879→                }
+  1880→            }
+  1881→            const target_node = nodes[link_info[2]];
+  1882→            if (origin_node && target_node)
+  1883→                origin_node.connect(link_info[1], target_node, link_info[3]);
+  1884→            else console.warn("Warning, nodes missing on pasting");
+  1885→        }
+  1886→
+  1887→        this.selectNodes(nodes);
+  1888→
+  1889→        this.graph.afterChange();
+  1890→    }
+  1891→
+  1892→    // ==================== DROP HANDLING ====================
+  1893→
+  1894→    processDrop(e) {
+  1895→        e.preventDefault();
+  1896→        this.adjustMouseEvent(e);
+  1897→        const x = e.clientX;
+  1898→        const y = e.clientY;
+  1899→        const is_inside =
+  1900→            !this.viewport ||
+  1901→            (this.viewport &&
+  1902→                x >= this.viewport[0] &&
+  1903→                x < this.viewport[0] + this.viewport[2] &&
+  1904→                y >= this.viewport[1] &&
+  1905→                y < this.viewport[1] + this.viewport[3]);
+  1906→        if (!is_inside) return;
+  1907→
+  1908→        const pos = [e.canvasX, e.canvasY];
+  1909→        const node = this.graph
+  1910→            ? this.graph.getNodeOnPos(pos[0], pos[1])
+  1911→            : null;
+  1912→
+  1913→        if (!node) {
+  1914→            let r = null;
+  1915→            if (this.onDropItem) {
+  1916→                r = this.onDropItem(event);
+  1917→            }
+  1918→            if (!r) {
+  1919→                this.checkDropItem(e);
+  1920→            }
+  1921→            return;
+  1922→        }
+  1923→
+  1924→        if (node.onDropFile || node.onDropData) {
+  1925→            const files = e.dataTransfer.files;
+  1926→            if (files && files.length) {
+  1927→                for (let i = 0; i < files.length; i++) {
+  1928→                    const file = e.dataTransfer.files[0];
+  1929→                    const filename = file.name;
+  1930→                    const ext = LGraphCanvas.getFileExtension(filename);
+  1931→
+  1932→                    if (node.onDropFile) {
+  1933→                        node.onDropFile(file);
+  1934→                    }
+  1935→
+  1936→                    if (node.onDropData) {
+  1937→                        const reader = new FileReader();
+  1938→                        reader.onload = (event) => {
+  1939→                            const data = event.target.result;
+  1940→                            node.onDropData(data, filename, file);
+  1941→                        };
+  1942→                        const type = file.type.split("/")[0];
+  1943→                        if (type === "text" || type === "") {
+  1944→                            reader.readAsText(file);
+  1945→                        } else if (type === "image") {
+  1946→                            reader.readAsDataURL(file);
+  1947→                        } else {
+  1948→                            reader.readAsArrayBuffer(file);
+  1949→                        }
+  1950→                    }
+  1951→                }
+  1952→            }
+  1953→        }
+  1954→
+  1955→        if (node.onDropItem) {
+  1956→            if (node.onDropItem(event)) return true;
+  1957→        }
+  1958→
+  1959→        if (this.onDropItem) {
+  1960→            return this.onDropItem(event);
+  1961→        }
+  1962→
+  1963→        return false;
+  1964→    }
+  1965→
+  1966→    checkDropItem(e) {
+  1967→        if (e.dataTransfer.files.length) {
+  1968→            const file = e.dataTransfer.files[0];
+  1969→            const ext = LGraphCanvas.getFileExtension(file.name).toLowerCase();
+  1970→            const nodetype = LiteGraph.node_types_by_file_extension[ext];
+  1971→            if (nodetype) {
+  1972→                this.graph.beforeChange();
+  1973→                const node = LiteGraph.createNode(nodetype.type);
+  1974→                node.pos = [e.canvasX, e.canvasY];
+  1975→                this.graph.add(node);
+  1976→                if (node.onDropFile) {
+  1977→                    node.onDropFile(file);
+  1978→                }
+  1979→                this.graph.afterChange();
+  1980→            }
+  1981→        }
+  1982→    }
+  1983→
+  1984→    static getFileExtension(url) {
+  1985→        let question = url.indexOf("?");
+  1986→        if (question !== -1) url = url.substr(0, question);
+  1987→        const point = url.lastIndexOf(".");
+  1988→        if (point === -1) return "";
+  1989→        return url.substr(point + 1).toLowerCase();
+  1990→    }
+  1991→
+  1992→    // ==================== NODE INTERACTION ====================
+  1993→
+  1994→    processNodeDblClicked(n) {
+  1995→        if (this.onShowNodePanel) {
+  1996→            this.onShowNodePanel(n);
+  1997→        } else {
+  1998→            this.showShowNodePanel(n);
+  1999→        }
+  2000→
+
+[showing lines 1-2000 of 7433; use offset=2001 with limit to continue reading]

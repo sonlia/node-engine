@@ -7422,6 +7422,223 @@ class LGraphCanvas {
         this.canvas.parentNode.appendChild(panel);
         return panel;
     }
+
+    // ==================== MISSING METHODS RESTORED ====================
+    // These methods existed in the original LGraphCanvas.prototype but
+    // were accidentally omitted during the ES6 refactoring.
+
+    /**
+     * Toggle live mode on/off. In live mode the graph cannot be edited.
+     */
+    switchLiveMode(animate) {
+        if (this.live_mode) {
+            this.live_mode = false;
+            if (animate) {
+                this.live_mode_fading = 1;
+            }
+            this.dirty_canvas = true;
+            this.dirty_bgcanvas = true;
+        } else {
+            this.live_mode = true;
+            if (animate) {
+                this.live_mode_fading = -1;
+            }
+            this.dirty_canvas = true;
+            this.dirty_bgcanvas = true;
+        }
+    }
+
+    /**
+     * Touch event handler — translates touch events to mouse events
+     * so the canvas can work on mobile devices.
+     */
+    touchHandler(event) {
+        //disable touch scrolling
+        event.preventDefault();
+        event.stopPropagation();
+
+        const rect = this.canvas.getBoundingClientRect();
+        const type = "";
+
+        //translate touch event
+        const touches = event.touches;
+        if (!touches || touches.length === 0) return;
+
+        const touch0 = touches[0];
+        const touch1 = touches[1];
+
+        const x = touch0.clientX - rect.left;
+        const y = touch0.clientY - rect.top;
+
+        if (event.type === "touchstart") {
+            if (touches.length === 1) {
+                const e = new PointerEvent("pointerdown", {
+                    button: 0,
+                    clientX: touch0.clientX,
+                    clientY: touch0.clientY,
+                    pointerId: touch0.identifier,
+                    isPrimary: true,
+                    pointerType: "touch",
+                    bubbles: true,
+                });
+                this.canvas.dispatchEvent(e);
+            } else if (touches.length === 2) {
+                //pinch
+                this._touch_bending = true;
+                this._touch_start_dist = Math.sqrt(
+                    (touch0.clientX - touch1.clientX) ** 2 +
+                    (touch0.clientY - touch1.clientY) ** 2
+                );
+                this._touch_start_scale = this.ds.scale;
+            }
+        } else if (event.type === "touchmove") {
+            if (this._touch_bending && touches.length === 2) {
+                const dist = Math.sqrt(
+                    (touch0.clientX - touch1.clientX) ** 2 +
+                    (touch0.clientY - touch1.clientY) ** 2
+                );
+                const scale = this._touch_start_scale * (dist / this._touch_start_dist);
+                this.ds.changeScale(scale, [
+                    (touch0.clientX + touch1.clientX) / 2 - rect.left,
+                    (touch0.clientY + touch1.clientY) / 2 - rect.top,
+                ]);
+                this.dirty_canvas = true;
+                this.dirty_bgcanvas = true;
+            } else {
+                const e = new PointerEvent("pointermove", {
+                    button: 0,
+                    clientX: touch0.clientX,
+                    clientY: touch0.clientY,
+                    pointerId: touch0.identifier,
+                    isPrimary: true,
+                    pointerType: "touch",
+                    bubbles: true,
+                });
+                this.canvas.dispatchEvent(e);
+            }
+        } else if (event.type === "touchend") {
+            this._touch_bending = false;
+            const e = new PointerEvent("pointerup", {
+                button: 0,
+                clientX: touch0.clientX,
+                clientY: touch0.clientY,
+                pointerId: touch0.identifier,
+                isPrimary: true,
+                pointerType: "touch",
+                bubbles: true,
+            });
+            this.canvas.dispatchEvent(e);
+        }
+    }
+
+    /**
+     * Auto-size all nodes to fit their content.
+     */
+    adjustNodesSize() {
+        if (!this.graph) return;
+        const nodes = this.graph._nodes;
+        for (let i = 0; i < nodes.length; ++i) {
+            nodes[i].setSize(nodes[i].computeSize());
+        }
+        this.setDirty(true, true);
+    }
+
+    /**
+     * Find the boundary nodes (topmost, bottommost, leftmost, rightmost)
+     * of the current selection. Returns [top, bottom, left, right] node array.
+     */
+    boundaryNodesForSelection() {
+        const nodes = this.selected_nodes;
+        if (!nodes) return null;
+        const ids = Object.keys(nodes);
+        if (ids.length === 0) return null;
+
+        let top = null,
+            bottom = null,
+            left = null,
+            right = null;
+
+        for (const id of ids) {
+            const node = nodes[id];
+            const pos = node.pos;
+            const size = node.size;
+            if (!top || pos[1] < top.pos[1]) top = node;
+            if (!bottom || pos[1] + size[1] > bottom.pos[1] + bottom.size[1]) bottom = node;
+            if (!left || pos[0] < left.pos[0]) left = node;
+            if (!right || pos[0] + size[0] > right.pos[0] + right.size[0]) right = node;
+        }
+        return { top, bottom, left, right };
+    }
+
+    /**
+     * Check/validate open panel state — close stale panels if needed.
+     */
+    checkPanels() {
+        if (this.node_panel) {
+            const selected = this.selected_nodes && Object.keys(this.selected_nodes).length === 1
+                ? this.selected_nodes[Object.keys(this.selected_nodes)[0]]
+                : null;
+            if (!selected || selected !== this.node_panel.node) {
+                this.node_panel.close();
+                this.node_panel = null;
+            }
+        }
+        if (this.options_panel) {
+            const selected = this.selected_nodes && Object.keys(this.selected_nodes).length === 1
+                ? this.selected_nodes[Object.keys(this.selected_nodes)[0]]
+                : null;
+            if (!selected || selected !== this.options_panel.node) {
+                this.options_panel.close();
+                this.options_panel = null;
+            }
+        }
+    }
+
+    /**
+     * Hit-test a rectangular area on the canvas. Used for buttons and UI elements.
+     * Returns true if the point is inside the given area.
+     */
+    isAreaClicked(area, x, y, margin) {
+        margin = margin || 0;
+        return (
+            x >= area[0] - margin &&
+            x <= area[0] + area[2] + margin &&
+            y >= area[1] - margin &&
+            y <= area[1] + area[3] + margin
+        );
+    }
+
+    /**
+     * Callback when node selection changes. Can be overridden.
+     */
+    onNodeSelectionChange() {
+        // override point for subclasses or event listeners
+    }
+
+    /**
+     * Display graph-level options panel.
+     */
+    showShowGraphOptionsPanel(refOpts, event) {
+        const graph = this.graph;
+        if (!graph) return;
+
+        const panel = this.createPanel("Options", { closable: true });
+        this.options_panel = panel;
+        panel.node = null;
+        panel.graph = graph;
+
+        // Add common graph options
+        const optEl = document.createElement("div");
+        optEl.className = "litemenu-entry";
+        optEl.innerHTML = "<span>Live Mode</span><input type='checkbox' class='lgraphconfig' id='live_mode'" + (this.live_mode ? " checked" : "") + ">";
+        optEl.querySelector("input").addEventListener("change", (e) => {
+            this.switchLiveMode(true);
+        });
+        panel.content.appendChild(optEl);
+
+        this.canvas.parentNode.appendChild(panel);
+        return panel;
+    }
 }
 
 // Assign to LiteGraph for compatibility

@@ -401,6 +401,18 @@ class LiteGraphClass {
   }
 
   /**
+   * Reload nodes from a folder (used with external node definitions).
+   * Scans for scripts and loads them to register new node types.
+   */
+  static reloadNodes(folder) {
+    // In a module-based environment, this is typically a no-op
+    // as node types are imported directly. Kept for API compatibility.
+    if (LiteGraph.debug) {
+      console.log("LiteGraph.reloadNodes: folder=" + folder);
+    }
+  }
+
+  /**
    * Add a method to ALL registered node types
    */
   static addNodeMethod(name, func) {
