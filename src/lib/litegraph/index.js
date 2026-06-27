@@ -13,6 +13,7 @@ import { LGraphGroup } from "./LGraphGroup.js";
 import { DragAndScale } from "./DragAndScale.js";
 import { LGraphCanvas } from "./LGraphCanvas.js";
 import { ContextMenu } from "./ContextMenu.js";
+import { CurveEditor } from "./CurveEditor.js";
 import {
   _setLiteGraphRef,
   pointerListenerAdd,
@@ -47,6 +48,7 @@ LiteGraph.LGraphGroup = LGraphGroup;
 LiteGraph.LGraphCanvas = LGraphCanvas;
 LiteGraph.DragAndScale = DragAndScale;
 LiteGraph.ContextMenu = ContextMenu;
+LiteGraph.CurveEditor = CurveEditor;
 
 // Register utility functions on LiteGraph for API compatibility.
 // In the original IIFE every one of these helpers was attached to the
@@ -93,6 +95,7 @@ export { LGraphGroup } from "./LGraphGroup.js";
 export { DragAndScale } from "./DragAndScale.js";
 export { LGraphCanvas } from "./LGraphCanvas.js";
 export { ContextMenu } from "./ContextMenu.js";
+export { CurveEditor } from "./CurveEditor.js";
 
 export {
   clamp,
