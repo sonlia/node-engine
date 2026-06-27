@@ -1,0 +1,561 @@
+     1→'use client';
+     2→
+     3→import { useEffect, useRef, useState, useCallback } from 'react';
+     4→import {
+     5→  LiteGraph,
+     6→  LGraph,
+     7→  LGraphNode,
+     8→  LGraphCanvas,
+     9→  LGraphGroup,
+    10→} from '@/lib/litegraph';
+    11→
+    12→// ===== Node type registry for sidebar =====
+    13→const NODE_CATEGORIES: Record<string, { type: string; title: string; desc: string }[]> = {
+    14→  'Basic': [
+    15→    { type: 'basic/number', title: 'Number', desc: 'Constant number' },
+    16→    { type: 'basic/string', title: 'String', desc: 'String constant' },
+    17→    { type: 'basic/display', title: 'Display', desc: 'Show value' },
+    18→    { type: 'basic/console', title: 'Console', desc: 'Console log' },
+    19→  ],
+    20→  'Math': [
+    21→    { type: 'math/math', title: 'Math', desc: 'Math operation' },
+    22→    { type: 'math/multiply', title: 'Multiply', desc: 'A × B' },
+    23→    { type: 'math/add', title: 'Add', desc: 'A + B' },
+    24→    { type: 'math/abs', title: 'Abs', desc: '|v|' },
+    25→    { type: 'math/clamp', title: 'Clamp', desc: 'Clamp value' },
+    26→  ],
+    27→  'Logic': [
+    28→    { type: 'logic/compare', title: 'Compare', desc: 'Compare values' },
+    29→    { type: 'logic/conditional', title: 'Conditional', desc: 'If/else gate' },
+    30→  ],
+    31→  'Event': [
+    32→    { type: 'event/timer', title: 'Timer', desc: 'Elapsed time' },
+    33→  ],
+    34→};
+    35→
+    36→// ===== Register all ES6 Class-based node types =====
+    37→
+    38→class NumberNode extends LGraphNode {
+    39→  constructor() { super('Number'); this.addOutput('value', 'number'); this.addProperty('value', 1.0, 'number'); this.addWidget('number', 'Value', 1.0, (v: number) => { this.properties.value = v; }); this.serialize_widgets = true; }
+    40→  onExecute() { this.setOutputData(0, parseFloat(this.properties.value)); }
+    41→  static title = 'Number'; static desc = 'Constant number';
+    42→}
+    43→class MathOpNode extends LGraphNode {
+    44→  constructor() { super('Math'); this.addInput('A', 'number'); this.addInput('B', 'number'); this.addOutput('=', 'number'); this.addProperty('OP', '+', 'enum', { values: ['+', '-', '*', '/', '%', '^', 'max', 'min'] }); this.addWidget('combo', 'Op', '+', (v: string) => { this.properties.OP = v; }, { values: ['+', '-', '*', '/', '%', '^', 'max', 'min'] }); this.serialize_widgets = true; }
+    45→  onExecute() { const A = this.getInputData(0) || 0; const B = this.getInputData(1) || 0; let r = 0; switch (this.properties.OP) { case '+': r = A + B; break; case '-': r = A - B; break; case '*': r = A * B; break; case '/': r = B !== 0 ? A / B : 0; break; case '%': r = A % B; break; case '^': r = Math.pow(A, B); break; case 'max': r = Math.max(A, B); break; case 'min': r = Math.min(A, B); break; default: r = A + B; } this.setOutputData(0, r); }
+    46→  static title = 'Math'; static desc = 'Math operation';
+    47→}
+    48→class DisplayNode extends LGraphNode {
+    49→  constructor() { super('Display'); this.addInput('value', 0); this.addProperty('value', '', 'string'); this.size = [120, 60]; }
+    50→  onExecute() { const v = this.getInputData(0); if (v !== null && v !== undefined) { this.properties.value = typeof v === 'object' ? JSON.stringify(v) : String(v); } }
+    51→  onDrawForeground(ctx: CanvasRenderingContext2D) { ctx.fillStyle = '#CCC'; ctx.font = '12px monospace'; ctx.textAlign = 'center'; ctx.fillText(this.properties.value || '—', this.size[0] * 0.5, this.size[1] * 0.5 + 4); }
+    52→  static title = 'Display'; static desc = 'Show value';
+    53→}
+    54→class StringNode extends LGraphNode {
+    55→  constructor() { super('String'); this.addOutput('text', 'string'); this.addProperty('value', 'hello', 'string'); this.addWidget('text', 'Text', 'hello', (v: string) => { this.properties.value = v; }); this.serialize_widgets = true; }
+    56→  onExecute() { this.setOutputData(0, this.properties.value); }
+    57→  static title = 'String'; static desc = 'String constant';
+    58→}
+    59→class CompareNode extends LGraphNode {
+    60→  constructor() { super('Compare'); this.addInput('A', 'number'); this.addInput('B', 'number'); this.addOutput('A>B', 'boolean'); this.addOutput('A==B', 'boolean'); this.addOutput('A<B', 'boolean'); }
+    61→  onExecute() { const A = this.getInputData(0) || 0; const B = this.getInputData(1) || 0; this.setOutputData(0, A > B); this.setOutputData(1, A === B); this.setOutputData(2, A < B); }
+    62→  static title = 'Compare'; static desc = 'Compare values';
+    63→}
+    64→class ConditionalNode extends LGraphNode {
+    65→  constructor() { super('Conditional'); this.addInput('cond', 'boolean'); this.addInput('true', 0); this.addInput('false', 0); this.addOutput('out', 0); }
+    66→  onExecute() { this.setOutputData(0, this.getInputData(0) ? this.getInputData(1) : this.getInputData(2)); }
+    67→  static title = 'Conditional'; static desc = 'If/else gate';
+    68→}
+    69→class TimerNode extends LGraphNode {
+    70→  constructor() { super('Timer'); this.addOutput('time', 'number'); this.addOutput('delta', 'number'); }
+    71→  onExecute() { const now = this.graph ? this.graph.globaltime : 0; this.setOutputData(0, now); this.setOutputData(1, 0.016); }
+    72→  static title = 'Timer'; static desc = 'Elapsed time';
+    73→}
+    74→class ConsoleNode extends LGraphNode {
+    75→  constructor() { super('Console'); this.addInput('log', 0); this.addProperty('prefix', 'LOG:', 'string'); this.addWidget('text', 'Prefix', 'LOG:', (v: string) => { this.properties.prefix = v; }); this.serialize_widgets = true; }
+    76→  onExecute() { const data = this.getInputData(0); if (data !== null && data !== undefined) { console.log(`[${this.properties.prefix}]`, data); } }
+    77→  static title = 'Console'; static desc = 'Console log';
+    78→}
+    79→class MultiplyNode extends LGraphNode {
+    80→  constructor() { super('Multiply'); this.addInput('A', 'number'); this.addInput('B', 'number'); this.addOutput('A*B', 'number'); }
+    81→  onExecute() { const A = this.getInputData(0) || 0; const B = this.getInputData(1) || 0; this.setOutputData(0, A * B); }
+    82→  static title = 'Multiply';
+    83→}
+    84→class AddNode extends LGraphNode {
+    85→  constructor() { super('Add'); this.addInput('A', 'number'); this.addInput('B', 'number'); this.addOutput('A+B', 'number'); }
+    86→  onExecute() { const A = this.getInputData(0) || 0; const B = this.getInputData(1) || 0; this.setOutputData(0, A + B); }
+    87→  static title = 'Add';
+    88→}
+    89→class AbsNode extends LGraphNode {
+    90→  constructor() { super('Abs'); this.addInput('v', 'number'); this.addOutput('|v|', 'number'); }
+    91→  onExecute() { this.setOutputData(0, Math.abs(this.getInputData(0) || 0)); }
+    92→  static title = 'Abs';
+    93→}
+    94→class ClampNode extends LGraphNode {
+    95→  constructor() { super('Clamp'); this.addInput('v', 'number'); this.addOutput('out', 'number'); this.addProperty('min', 0, 'number'); this.addProperty('max', 1, 'number'); this.addWidget('number', 'Min', 0, (v: number) => { this.properties.min = v; }); this.addWidget('number', 'Max', 1, (v: number) => { this.properties.max = v; }); this.serialize_widgets = true; }
+    96→  onExecute() { const v = this.getInputData(0) || 0; this.setOutputData(0, Math.max(this.properties.min, Math.min(this.properties.max, v))); }
+    97→  static title = 'Clamp';
+    98→}
+    99→
+   100→LiteGraph.registerNodeType('basic/number', NumberNode);
+   101→LiteGraph.registerNodeType('math/math', MathOpNode);
+   102→LiteGraph.registerNodeType('basic/display', DisplayNode);
+   103→LiteGraph.registerNodeType('basic/string', StringNode);
+   104→LiteGraph.registerNodeType('logic/compare', CompareNode);
+   105→LiteGraph.registerNodeType('logic/conditional', ConditionalNode);
+   106→LiteGraph.registerNodeType('event/timer', TimerNode);
+   107→LiteGraph.registerNodeType('basic/console', ConsoleNode);
+   108→LiteGraph.registerNodeType('math/multiply', MultiplyNode);
+   109→LiteGraph.registerNodeType('math/add', AddNode);
+   110→LiteGraph.registerNodeType('math/abs', AbsNode);
+   111→LiteGraph.registerNodeType('math/clamp', ClampNode);
+   112→
+   113→// ===== Demo graph =====
+   114→function createDemoGraph(graph: LGraph) {
+   115→  const n1 = LiteGraph.createNode('basic/number'); n1.pos = [100, 100]; n1.setProperty('value', 42); graph.add(n1);
+   116→  const n2 = LiteGraph.createNode('basic/number'); n2.pos = [100, 280]; n2.setProperty('value', 8); graph.add(n2);
+   117→  const m = LiteGraph.createNode('math/math'); m.pos = [350, 160]; graph.add(m);
+   118→  const d = LiteGraph.createNode('basic/display'); d.pos = [600, 180]; graph.add(d);
+   119→  const n3 = LiteGraph.createNode('basic/number'); n3.pos = [100, 450]; n3.setProperty('value', 3.14); graph.add(n3);
+   120→  const mul = LiteGraph.createNode('math/multiply'); mul.pos = [350, 400]; graph.add(mul);
+   121→  const d2 = LiteGraph.createNode('basic/display'); d2.pos = [600, 420]; graph.add(d2);
+   122→  const t = LiteGraph.createNode('event/timer'); t.pos = [100, 600]; graph.add(t);
+   123→  const d3 = LiteGraph.createNode('basic/display'); d3.pos = [350, 600]; graph.add(d3);
+   124→  n1.connect(0, m, 0); n2.connect(0, m, 1); m.connect(0, d, 0);
+   125→  n3.connect(0, mul, 0); n3.connect(0, mul, 1); mul.connect(0, d2, 0);
+   126→  t.connect(0, d3, 0);
+   127→}
+   128→
+   129→// ===== Property editor helper =====
+   130→function PropertyEditor({ node, onChange }: { node: any; onChange: () => void }) {
+   131→  if (!node) return null;
+   132→  const props = node.properties || {};
+   133→  const entries = Object.entries(props);
+   134→
+   135→  const handleChange = (key: string, value: any) => {
+   136→    node.setProperty(key, value);
+   137→    onChange();
+   138→  };
+   139→
+   140→  return (
+   141→    <div className="space-y-2">
+   142→      <div className="text-[10px] text-gray-500 uppercase tracking-wider">Properties</div>
+   143→      {entries.map(([key, val]) => (
+   144→        <div key={key} className="space-y-0.5">
+   145→          <label className="text-[10px] text-gray-400">{key}</label>
+   146→          <input
+   147→            type={typeof val === 'number' ? 'number' : 'text'}
+   148→            value={val ?? ''}
+   149→            onChange={(e) => handleChange(key, typeof val === 'number' ? parseFloat(e.target.value) || 0 : e.target.value)}
+   150→            className="w-full px-2 py-1 text-xs bg-[#1c2128] border border-gray-700/50 rounded text-gray-200 focus:outline-none focus:border-cyan-500/50"
+   151→          />
+   152→        </div>
+   153→      ))}
+   154→      {/* Inputs */}
+   155→      {node.inputs && node.inputs.length > 0 && (
+   156→        <div className="mt-3">
+   157→          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Inputs</div>
+   158→          {node.inputs.map((inp: any, i: number) => (
+   159→            <div key={i} className="flex items-center gap-2 text-[11px] py-0.5">
+   160→              <span className="w-2 h-2 rounded-full bg-emerald-500/60 shrink-0" />
+   161→              <span className="text-gray-300">{inp.name}</span>
+   162→              <span className="text-gray-600 text-[10px] ml-auto">{inp.type || '*'}</span>
+   163→            </div>
+   164→          ))}
+   165→        </div>
+   166→      )}
+   167→      {/* Outputs */}
+   168→      {node.outputs && node.outputs.length > 0 && (
+   169→        <div className="mt-3">
+   170→          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Outputs</div>
+   171→          {node.outputs.map((out: any, i: number) => (
+   172→            <div key={i} className="flex items-center gap-2 text-[11px] py-0.5">
+   173→              <span className="w-2 h-2 rounded-full bg-cyan-500/60 shrink-0" />
+   174→              <span className="text-gray-300">{out.name}</span>
+   175→              <span className="text-gray-600 text-[10px] ml-auto">{out.type || '*'}</span>
+   176→            </div>
+   177→          ))}
+   178→        </div>
+   179→      )}
+   180→      {/* Position */}
+   181→      <div className="mt-3">
+   182→        <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Position</div>
+   183→        <div className="flex gap-2">
+   184→          <div className="flex-1">
+   185→            <label className="text-[10px] text-gray-400">X</label>
+   186→            <input
+   187→              type="number"
+   188→              value={Math.round(node.pos?.[0] ?? 0)}
+   189→              onChange={(e) => { if (node.pos) { node.pos[0] = parseFloat(e.target.value) || 0; onChange(); } }}
+   190→              className="w-full px-2 py-1 text-xs bg-[#1c2128] border border-gray-700/50 rounded text-gray-200 focus:outline-none focus:border-cyan-500/50"
+   191→            />
+   192→          </div>
+   193→          <div className="flex-1">
+   194→            <label className="text-[10px] text-gray-400">Y</label>
+   195→            <input
+   196→              type="number"
+   197→              value={Math.round(node.pos?.[1] ?? 0)}
+   198→              onChange={(e) => { if (node.pos) { node.pos[1] = parseFloat(e.target.value) || 0; onChange(); } }}
+   199→              className="w-full px-2 py-1 text-xs bg-[#1c2128] border border-gray-700/50 rounded text-gray-200 focus:outline-none focus:border-cyan-500/50"
+   200→            />
+   201→          </div>
+   202→        </div>
+   203→      </div>
+   204→    </div>
+   205→  );
+   206→}
+   207→
+   208→// ===== Main Page =====
+   209→export default function Home() {
+   210→  const canvasRef = useRef<HTMLCanvasElement>(null);
+   211→  const containerRef = useRef<HTMLDivElement>(null);
+   212→  const [isRunning, setIsRunning] = useState(false);
+   213→  const [nodeCount, setNodeCount] = useState(0);
+   214→  const [selectedNode, setSelectedNode] = useState<any>(null);
+   215→  const [showCodePanel, setShowCodePanel] = useState(false);
+   216→  const [codePanelTab, setCodePanelTab] = useState<'original' | 'refactored'>('refactored');
+   217→  const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({ Basic: true, Math: true });
+   218→  const graphCanvasRef = useRef<LGraphCanvas | null>(null);
+   219→  const graphRef = useRef<LGraph | null>(null);
+   220→  const propPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+   221→
+   222→  // Poll selected node from graphCanvas
+   223→  const pollSelectedNode = useCallback(() => {
+   224→    const gc = graphCanvasRef.current;
+   225→    if (!gc) return;
+   226→    const selNodes = gc.selected_nodes || {};
+   227→    const ids = Object.keys(selNodes);
+   228→    if (ids.length === 1) {
+   229→      setSelectedNode((prev: any) => {
+   230→        const n = selNodes[ids[0]];
+   231→        // Keep same reference if same id
+   232→        if (prev && prev.id === n.id) return prev;
+   233→        return n;
+   234→      });
+   235→    } else {
+   236→      setSelectedNode(null);
+   237→    }
+   238→    setNodeCount(gc.graph ? gc.graph._nodes.length : 0);
+   239→  }, []);
+   240→
+   241→  useEffect(() => {
+   242→    const canvas = canvasRef.current;
+   243→    const container = containerRef.current;
+   244→    if (!canvas || !container) return;
+   245→
+   246→    canvas.width = container.clientWidth;
+   247→    canvas.height = container.clientHeight;
+   248→
+   249→    const graph = new LGraph();
+   250→    graphRef.current = graph;
+   251→
+   252→    const graphCanvas = new LGraphCanvas(canvas, graph, { autoresize: true });
+   253→    graphCanvasRef.current = graphCanvas;
+   254→
+   255→    (window as any).__graphCanvas = graphCanvas;
+   256→    (window as any).__graph = graph;
+   257→    (window as any).__LiteGraph = LiteGraph;
+   258→
+   259→    graphCanvas.background_image = null;
+   260→    graphCanvas.clear_background_color = '#1a1a2e';
+   261→    graphCanvas.render_shadows = true;
+   262→    graphCanvas.render_connections_border = true;
+   263→    graphCanvas.render_curved_connections = true;
+   264→    graphCanvas.links_render_mode = LiteGraph.SPLINE_LINK;
+   265→
+   266→    createDemoGraph(graph);
+   267→    queueMicrotask(() => setNodeCount(graph._nodes.length));
+   268→
+   269→    // Poll selected node every 300ms
+   270→    propPollRef.current = setInterval(pollSelectedNode, 300);
+   271→
+   272→    const ro = new ResizeObserver(() => {
+   273→      if (container && canvas) {
+   274→        canvas.width = container.clientWidth;
+   275→        canvas.height = container.clientHeight;
+   276→        graphCanvas.resize();
+   277→        graphCanvas.setDirty(true, true);
+   278→      }
+   279→    });
+   280→    ro.observe(container);
+   281→
+   282→    graph.start();
+   283→    queueMicrotask(() => setIsRunning(true));
+   284→
+   285→    return () => {
+   286→      graph.stop();
+   287→      graphCanvas.stopRendering();
+   288→      ro.disconnect();
+   289→      if (propPollRef.current) clearInterval(propPollRef.current);
+   290→    };
+   291→  }, []);
+   292→
+   293→  const handleAddNodeType = useCallback((type: string) => {
+   294→    const graph = graphRef.current;
+   295→    const gc = graphCanvasRef.current;
+   296→    if (!graph) return;
+   297→    const node = LiteGraph.createNode(type);
+   298→    if (!node) return;
+   299→    // Place at center of current viewport
+   300→    const cx = gc ? gc.graph_mouse[0] : 300;
+   301→    const cy = gc ? gc.graph_mouse[1] : 200;
+   302→    node.pos = [cx + Math.random() * 40 - 20, cy + Math.random() * 40 - 20];
+   303→    graph.add(node);
+   304→    // Select the new node
+   305→    if (gc) {
+   306→      gc.selectNodes([node]);
+   307→      gc.setDirty(true, true);
+   308→    }
+   309→    setNodeCount(graph._nodes.length);
+   310→    setSelectedNode(node);
+   311→  }, []);
+   312→
+   313→  const handlePlayStop = useCallback(() => {
+   314→    const graph = graphRef.current;
+   315→    if (!graph) return;
+   316→    if (isRunning) { graph.stop(); } else { graph.start(); }
+   317→    setIsRunning(!isRunning);
+   318→  }, [isRunning]);
+   319→
+   320→  const handleClear = useCallback(() => {
+   321→    const graph = graphRef.current;
+   322→    if (!graph) return;
+   323→    graph.clear();
+   324→    setNodeCount(0);
+   325→    setSelectedNode(null);
+   326→  }, []);
+   327→
+   328→  const handleLoadDemo = useCallback(() => {
+   329→    const graph = graphRef.current;
+   330→    if (!graph) return;
+   331→    graph.clear();
+   332→    createDemoGraph(graph);
+   333→    setNodeCount(graph._nodes.length);
+   334→    setSelectedNode(null);
+   335→  }, []);
+   336→
+   337→  const handleArrange = useCallback(() => {
+   338→    const graph = graphRef.current;
+   339→    const gc = graphCanvasRef.current;
+   340→    if (!graph) return;
+   341→    graph.arrange();
+   342→    if (gc) gc.setDirty(true, true);
+   343→  }, []);
+   344→
+   345→  const toggleCat = (cat: string) => setExpandedCats((p: any) => ({ ...p, [cat]: !p[cat] }));
+   346→
+   347→  const codeExamples = {
+   348→    original: `// ===== Original (IIFE + Prototype) =====
+   349→(function(global) {
+   350→  var LiteGraph = (global.LiteGraph = {
+   351→    VERSION: 0.4,
+   352→    registered_node_types: {},
+   353→    registerNodeType: function(type, base_class) {
+   354→      for (var i in LGraphNode.prototype) {
+   355→        if (!base_class.prototype[i])
+   356→          base_class.prototype[i] = LGraphNode.prototype[i];
+   357→      }
+   358→      this.registered_node_types[type] = base_class;
+   359→    },
+   360→  });
+   361→  function LGraphNode(title) { this._ctor(title); }
+   362→  LGraphNode.prototype._ctor = function(title) {
+   363→    this.title = title || "Unnamed";
+   364→    Object.defineProperty(this, "pos", {
+   365→      set: function(v) { this._pos[0]=v[0]; this._pos[1]=v[1]; },
+   366→      get: function() { return this._pos; },
+   367→    });
+   368→  };
+   369→})(this);`,
+   370→    refactored: `// ===== Refactored (ES6 Class + Modules) =====
+   371→import { LiteGraph } from "./LiteGraph.js";
+   372→import { LGraphNode } from "./LGraphNode.js";
+   373→
+   374→class LiteGraphClass {
+   375→  static VERSION = 0.4;
+   376→  static registered_node_types = {};
+   377→  static registerNodeType(type, baseClass) {
+   378→    this.registered_node_types[type] = baseClass;
+   379→  }
+   380→}
+   381→
+   382→class LGraphNode {
+   383→  constructor(title) {
+   384→    this.title = title || "Unnamed";
+   385→    this._pos = new Float32Array([10, 10]);
+   386→  }
+   387→  get pos() { return this._pos; }
+   388→  set pos(v) { this._pos[0]=v[0]; this._pos[1]=v[1]; }
+   389→  connect(outputSlot, targetNode, inputSlot) { ... }
+   390→}
+   391→
+   392→class NumberNode extends LGraphNode {
+   393→  constructor() {
+   394→    super("Number");
+   395→    this.addOutput("value", "number");
+   396→  }
+   397→  onExecute() { this.setOutputData(0, parseFloat(this.properties.value)); }
+   398→}
+   399→LiteGraph.registerNodeType("basic/number", NumberNode);`,
+   400→  };
+   401→
+   402→  return (
+   403→    <div className="flex flex-col h-screen bg-[#0d1117] text-gray-200">
+   404→      {/* Header */}
+   405→      <header className="flex items-center justify-between px-4 py-2 bg-[#161b22] border-b border-gray-700/50 shrink-0">
+   406→        <div className="flex items-center gap-2">
+   407→          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center">
+   408→            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+   409→              <circle cx="5" cy="6" r="3"/><circle cx="19" cy="6" r="3"/><circle cx="12" cy="18" r="3"/>
+   410→              <line x1="8" y1="6" x2="16" y2="6"/><line x1="12" y1="9" x2="12" y2="15"/>
+   411→            </svg>
+   412→          </div>
+   413→          <div>
+   414→            <h1 className="text-sm font-bold text-white tracking-tight">LiteGraph.js ES6</h1>
+   415→            <p className="text-[10px] text-gray-500">Node Graph Editor &bull; ES6 Class Architecture</p>
+   416→          </div>
+   417→        </div>
+   418→        <div className="flex items-center gap-2">
+   419→          <button onClick={handlePlayStop} className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${isRunning ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30'}`}>
+   420→            {isRunning ? '⏹ Stop' : '▶ Run'}
+   421→          </button>
+   422→          <button onClick={handleArrange} className="px-3 py-1.5 rounded-md text-xs font-medium bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 transition-colors">⬒ Arrange</button>
+   423→          <button onClick={handleLoadDemo} className="px-3 py-1.5 rounded-md text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-colors">↻ Demo</button>
+   424→          <button onClick={handleClear} className="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 border border-gray-500/30 transition-colors">✕ Clear</button>
+   425→          <div className="px-2 py-1 rounded bg-gray-800 text-[10px] text-gray-500">Nodes: {nodeCount}</div>
+   426→          <button onClick={() => setShowCodePanel(!showCodePanel)} className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${showCodePanel ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 border border-gray-500/30'}`}>
+   427→            {'</>'}
+   428→          </button>
+   429→        </div>
+   430→      </header>
+   431→
+   432→      {/* Main content: Left Panel | Canvas | Right Panel */}
+   433→      <div className="flex flex-1 min-h-0">
+   434→        {/* ===== Left Panel: Node Palette ===== */}
+   435→        <div className="w-[200px] shrink-0 bg-[#0d1117] border-r border-gray-700/50 flex flex-col">
+   436→          <div className="px-3 py-2 border-b border-gray-700/50">
+   437→            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Node Palette</div>
+   438→            <div className="text-[10px] text-gray-600 mt-0.5">Click to add node</div>
+   439→          </div>
+   440→          <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+   441→            {Object.entries(NODE_CATEGORIES).map(([cat, nodes]) => (
+   442→              <div key={cat}>
+   443→                <button
+   444→                  onClick={() => toggleCat(cat)}
+   445→                  className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-medium text-gray-300 hover:text-white hover:bg-gray-800/50 rounded transition-colors"
+   446→                >
+   447→                  <span className={`text-[9px] transition-transform ${expandedCats[cat] ? 'rotate-90' : ''}`}>▶</span>
+   448→                  <span>{cat}</span>
+   449→                  <span className="ml-auto text-[9px] text-gray-600">{nodes.length}</span>
+   450→                </button>
+   451→                {expandedCats[cat] && (
+   452→                  <div className="ml-3 space-y-0.5 mb-1">
+   453→                    {nodes.map((n) => (
+   454→                      <button
+   455→                        key={n.type}
+   456→                        onClick={() => handleAddNodeType(n.type)}
+   457→                        className="w-full text-left px-2 py-1.5 rounded text-[11px] hover:bg-cyan-500/10 hover:text-cyan-300 transition-colors group flex items-center gap-2"
+   458→                      >
+   459→                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/40 group-hover:bg-cyan-400 shrink-0" />
+   460→                        <div>
+   461→                          <div className="font-medium">{n.title}</div>
+   462→                          <div className="text-[9px] text-gray-600 group-hover:text-gray-400">{n.desc}</div>
+   463→                        </div>
+   464→                      </button>
+   465→                    ))}
+   466→                  </div>
+   467→                )}
+   468→              </div>
+   469→            ))}
+   470→          </div>
+   471→          {/* Hints */}
+   472→          <div className="px-3 py-2 border-t border-gray-700/50 text-[9px] text-gray-600 space-y-0.5">
+   473→            <div>Scroll → Zoom</div>
+   474→            <div>Space+Drag → Pan</div>
+   475→            <div>Drag slot → Connect</div>
+   476→            <div>Tab → Search</div>
+   477→          </div>
+   478→        </div>
+   479→
+   480→        {/* ===== Canvas ===== */}
+   481→        <div ref={containerRef} className="flex-1 relative">
+   482→          <canvas
+   483→            ref={canvasRef}
+   484→            className="w-full h-full block"
+   485→            style={{ background: '#1a1a2e' }}
+   486→          />
+   487→          <div className="absolute bottom-3 left-3 px-2 py-1 rounded bg-black/60 text-[10px] text-gray-400 backdrop-blur-sm">
+   488→            ✨ ES6 Class Modules
+   489→          </div>
+   490→        </div>
+   491→
+   492→        {/* ===== Right Panel: Properties ===== */}
+   493→        <div className="w-[240px] shrink-0 bg-[#0d1117] border-l border-gray-700/50 flex flex-col">
+   494→          <div className="px-3 py-2 border-b border-gray-700/50">
+   495→            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Inspector</div>
+   496→          </div>
+   497→          <div className="flex-1 overflow-y-auto px-3 py-3">
+   498→            {selectedNode ? (
+   499→              <>
+   500→                <div className="mb-3">
+   501→                  <div className="text-xs font-bold text-white">{selectedNode.title}</div>
+   502→                  <div className="text-[10px] text-gray-500">ID: {selectedNode.id} &bull; {selectedNode.type}</div>
+   503→                </div>
+   504→                <PropertyEditor
+   505→                  node={selectedNode}
+   506→                  onChange={() => {
+   507→                    const gc = graphCanvasRef.current;
+   508→                    if (gc) gc.setDirty(true, true);
+   509→                  }}
+   510→                />
+   511→              </>
+   512→            ) : (
+   513→              <div className="text-center py-8">
+   514→                <div className="text-gray-600 text-xs">No node selected</div>
+   515→                <div className="text-gray-700 text-[10px] mt-1">Click a node to inspect</div>
+   516→              </div>
+   517→            )}
+   518→          </div>
+   519→        </div>
+   520→
+   521→        {/* ===== Code Panel (overlay on right) ===== */}
+   522→        {showCodePanel && (
+   523→          <div className="w-[420px] shrink-0 bg-[#0d1117] border-l border-gray-700/50 flex flex-col">
+   524→            <div className="flex border-b border-gray-700/50">
+   525→              <button onClick={() => setCodePanelTab('refactored')} className={`flex-1 px-4 py-2 text-xs font-medium transition-colors ${codePanelTab === 'refactored' ? 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5' : 'text-gray-500 hover:text-gray-300'}`}>
+   526→                ES6 ✨
+   527→              </button>
+   528→              <button onClick={() => setCodePanelTab('original')} className={`flex-1 px-4 py-2 text-xs font-medium transition-colors ${codePanelTab === 'original' ? 'text-orange-400 border-b-2 border-orange-400 bg-orange-500/5' : 'text-gray-500 hover:text-gray-300'}`}>
+   529→                Original
+   530→              </button>
+   531→            </div>
+   532→            <div className="flex-1 overflow-auto p-4">
+   533→              <pre className="text-[11px] leading-relaxed whitespace-pre-wrap font-mono text-gray-300">
+   534→                <code>{codeExamples[codePanelTab]}</code>
+   535→              </pre>
+   536→            </div>
+   537→            <div className="border-t border-gray-700/50 p-3">
+   538→              <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">重构要点</h3>
+   539→              <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+   540→                {[
+   541→                  ['IIFE → Module', '(function(){})() → import/export'],
+   542→                  ['Function → Class', 'function LGraph() → class LGraph'],
+   543→                  ['Prototype → Method', '.prototype.fn → class method'],
+   544→                  ['Mixin → Extends', 'registerNodeType mixin → extends'],
+   545→                  ['defineProperty → get/set', 'Object.defineProperty → accessor'],
+   546→                  ['Global → Scope', 'window.LiteGraph → export default'],
+   547→                ].map(([t, d]) => (
+   548→                  <div key={t} className="p-1.5 rounded bg-emerald-500/10 border border-emerald-500/20">
+   549→                    <div className="text-emerald-400 font-medium">{t}</div>
+   550→                    <div className="text-gray-500">{d}</div>
+   551→                  </div>
+   552→                ))}
+   553→              </div>
+   554→            </div>
+   555→          </div>
+   556→        )}
+   557→      </div>
+   558→    </div>
+   559→  );
+   560→}
+   561→
