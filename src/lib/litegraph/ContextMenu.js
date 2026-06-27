@@ -50,15 +50,18 @@ class ContextMenu {
         }
 
         // ---- validate event type ----
+        // Only warn if a completely unrelated object is passed.
+        // PointerEvent, MouseEvent, and plain objects with clientX/clientY are all fine.
         let eventClass = null;
         if (options.event) {
-            // use strings because comparing classes between windows doesn't work
-            eventClass = options.event.constructor.name;
+            eventClass = options.event.constructor ? options.event.constructor.name : "unknown";
         }
         if (
             eventClass !== "MouseEvent" &&
             eventClass !== "CustomEvent" &&
-            eventClass !== "PointerEvent"
+            eventClass !== "PointerEvent" &&
+            eventClass !== "Object" &&
+            eventClass !== "unknown"
         ) {
             console.error(
                 "Event passed to ContextMenu is not of type MouseEvent or CustomEvent. Ignoring it. (" +
