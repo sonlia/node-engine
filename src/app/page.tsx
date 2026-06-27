@@ -1,21 +1,280 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { LiteGraph } from '@/lib/litegraph/LiteGraph';
+import { LGraph } from '@/lib/litegraph/LGraph';
+import { LGraphNode } from '@/lib/litegraph/LGraphNode';
+import { LGraphCanvas } from '@/lib/litegraph/LGraphCanvas';
+import { LGraphGroup } from '@/lib/litegraph/LGraphGroup';
 
-/**
- * LiteGraph.js ES6 Class Refactoring Preview
- * 
- * This page demonstrates the refactored litegraph.js node graph editor.
- * The original IIFE-based code has been refactored into proper ES6 classes.
- * 
- * Key refactoring changes:
- * 1. IIFE → ES6 Modules with import/export
- * 2. Constructor functions → class syntax
- * 3. Prototype methods → class methods
- * 4. Mixin inheritance → proper `extends LGraphNode`
- * 5. Object.defineProperty → ES6 get/set accessors
- * 6. Global namespace → Module scope
- */
+// ===== Register all ES6 Class-based node types =====
+
+class NumberNode extends LGraphNode {
+  constructor() {
+    super('Number');
+    this.addOutput('value', 'number');
+    this.addProperty('value', 1.0, 'number');
+    this.addWidget('number', 'Value', 1.0, (v: number) => { this.properties.value = v; });
+    this.serialize_widgets = true;
+  }
+  onExecute() { this.setOutputData(0, parseFloat(this.properties.value)); }
+  static title = 'Number';
+  static desc = 'Constant number';
+}
+
+class MathOpNode extends LGraphNode {
+  constructor() {
+    super('Math');
+    this.addInput('A', 'number');
+    this.addInput('B', 'number');
+    this.addOutput('=', 'number');
+    this.addProperty('OP', '+', 'enum', { values: ['+', '-', '*', '/', '%', '^', 'max', 'min'] });
+    this.addWidget('combo', 'Op', '+', (v: string) => { this.properties.OP = v; }, { values: ['+', '-', '*', '/', '%', '^', 'max', 'min'] });
+    this.serialize_widgets = true;
+  }
+  onExecute() {
+    const A = this.getInputData(0) || 0;
+    const B = this.getInputData(1) || 0;
+    let r = 0;
+    switch (this.properties.OP) {
+      case '+': r = A + B; break; case '-': r = A - B; break;
+      case '*': r = A * B; break; case '/': r = B !== 0 ? A / B : 0; break;
+      case '%': r = A % B; break; case '^': r = Math.pow(A, B); break;
+      case 'max': r = Math.max(A, B); break; case 'min': r = Math.min(A, B); break;
+      default: r = A + B;
+    }
+    this.setOutputData(0, r);
+  }
+  static title = 'Math';
+  static desc = 'Math operation';
+}
+
+class DisplayNode extends LGraphNode {
+  constructor() {
+    super('Display');
+    this.addInput('value', 0);
+    this.addProperty('value', '', 'string');
+    this.size = [120, 60];
+  }
+  onExecute() {
+    const v = this.getInputData(0);
+    if (v !== null && v !== undefined) {
+      this.properties.value = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    }
+  }
+  onDrawForeground(ctx: CanvasRenderingContext2D) {
+    ctx.fillStyle = '#CCC';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(this.properties.value || '—', this.size[0] * 0.5, this.size[1] * 0.5 + 4);
+  }
+  static title = 'Display';
+  static desc = 'Show value';
+}
+
+class StringNode extends LGraphNode {
+  constructor() {
+    super('String');
+    this.addOutput('text', 'string');
+    this.addProperty('value', 'hello', 'string');
+    this.addWidget('text', 'Text', 'hello', (v: string) => { this.properties.value = v; });
+    this.serialize_widgets = true;
+  }
+  onExecute() { this.setOutputData(0, this.properties.value); }
+  static title = 'String';
+  static desc = 'String constant';
+}
+
+class CompareNode extends LGraphNode {
+  constructor() {
+    super('Compare');
+    this.addInput('A', 'number');
+    this.addInput('B', 'number');
+    this.addOutput('A>B', 'boolean');
+    this.addOutput('A==B', 'boolean');
+    this.addOutput('A<B', 'boolean');
+  }
+  onExecute() {
+    const A = this.getInputData(0) || 0;
+    const B = this.getInputData(1) || 0;
+    this.setOutputData(0, A > B);
+    this.setOutputData(1, A === B);
+    this.setOutputData(2, A < B);
+  }
+  static title = 'Compare';
+  static desc = 'Compare values';
+}
+
+class ConditionalNode extends LGraphNode {
+  constructor() {
+    super('Conditional');
+    this.addInput('cond', 'boolean');
+    this.addInput('true', 0);
+    this.addInput('false', 0);
+    this.addOutput('out', 0);
+  }
+  onExecute() {
+    this.setOutputData(0, this.getInputData(0) ? this.getInputData(1) : this.getInputData(2));
+  }
+  static title = 'Conditional';
+  static desc = 'If/else gate';
+}
+
+class TimerNode extends LGraphNode {
+  constructor() {
+    super('Timer');
+    this.addOutput('time', 'number');
+    this.addOutput('delta', 'number');
+  }
+  onExecute() {
+    const now = this.graph ? this.graph.globaltime : 0;
+    this.setOutputData(0, now);
+    this.setOutputData(1, 0.016);
+  }
+  static title = 'Timer';
+  static desc = 'Elapsed time';
+}
+
+class ConsoleNode extends LGraphNode {
+  constructor() {
+    super('Console');
+    this.addInput('log', 0);
+    this.addProperty('prefix', 'LOG:', 'string');
+    this.addWidget('text', 'Prefix', 'LOG:', (v: string) => { this.properties.prefix = v; });
+    this.serialize_widgets = true;
+  }
+  onExecute() {
+    const data = this.getInputData(0);
+    if (data !== null && data !== undefined) {
+      console.log(`[${this.properties.prefix}]`, data);
+    }
+  }
+  static title = 'Console';
+  static desc = 'Console log';
+}
+
+class MultiplyNode extends LGraphNode {
+  constructor() {
+    super('Multiply');
+    this.addInput('A', 'number');
+    this.addInput('B', 'number');
+    this.addOutput('A*B', 'number');
+  }
+  onExecute() {
+    const A = this.getInputData(0) || 0;
+    const B = this.getInputData(1) || 0;
+    this.setOutputData(0, A * B);
+  }
+  static title = 'Multiply';
+}
+
+class AddNode extends LGraphNode {
+  constructor() {
+    super('Add');
+    this.addInput('A', 'number');
+    this.addInput('B', 'number');
+    this.addOutput('A+B', 'number');
+  }
+  onExecute() {
+    const A = this.getInputData(0) || 0;
+    const B = this.getInputData(1) || 0;
+    this.setOutputData(0, A + B);
+  }
+  static title = 'Add';
+}
+
+class AbsNode extends LGraphNode {
+  constructor() {
+    super('Abs');
+    this.addInput('v', 'number');
+    this.addOutput('|v|', 'number');
+  }
+  onExecute() { this.setOutputData(0, Math.abs(this.getInputData(0) || 0)); }
+  static title = 'Abs';
+}
+
+class ClampNode extends LGraphNode {
+  constructor() {
+    super('Clamp');
+    this.addInput('v', 'number');
+    this.addOutput('out', 'number');
+    this.addProperty('min', 0, 'number');
+    this.addProperty('max', 1, 'number');
+    this.addWidget('number', 'Min', 0, (v: number) => { this.properties.min = v; });
+    this.addWidget('number', 'Max', 1, (v: number) => { this.properties.max = v; });
+    this.serialize_widgets = true;
+  }
+  onExecute() {
+    const v = this.getInputData(0) || 0;
+    this.setOutputData(0, Math.max(this.properties.min, Math.min(this.properties.max, v)));
+  }
+  static title = 'Clamp';
+}
+
+// Register all node types (ES6 Class inheritance!)
+LiteGraph.registerNodeType('basic/number', NumberNode);
+LiteGraph.registerNodeType('math/math', MathOpNode);
+LiteGraph.registerNodeType('basic/display', DisplayNode);
+LiteGraph.registerNodeType('basic/string', StringNode);
+LiteGraph.registerNodeType('logic/compare', CompareNode);
+LiteGraph.registerNodeType('logic/conditional', ConditionalNode);
+LiteGraph.registerNodeType('event/timer', TimerNode);
+LiteGraph.registerNodeType('basic/console', ConsoleNode);
+LiteGraph.registerNodeType('math/multiply', MultiplyNode);
+LiteGraph.registerNodeType('math/add', AddNode);
+LiteGraph.registerNodeType('math/abs', AbsNode);
+LiteGraph.registerNodeType('math/clamp', ClampNode);
+
+// ===== Page Component =====
+
+function createDemoGraph(graph: LGraph) {
+  const n1 = LiteGraph.createNode('basic/number');
+  n1.pos = [100, 100]; n1.setProperty('value', 42); graph.add(n1);
+
+  const n2 = LiteGraph.createNode('basic/number');
+  n2.pos = [100, 280]; n2.setProperty('value', 8); graph.add(n2);
+
+  const m = LiteGraph.createNode('math/math');
+  m.pos = [350, 160]; graph.add(m);
+
+  const d = LiteGraph.createNode('basic/display');
+  d.pos = [600, 180]; graph.add(d);
+
+  const n3 = LiteGraph.createNode('basic/number');
+  n3.pos = [100, 450]; n3.setProperty('value', 3.14); graph.add(n3);
+
+  const mul = LiteGraph.createNode('math/multiply');
+  mul.pos = [350, 400]; graph.add(mul);
+
+  const d2 = LiteGraph.createNode('basic/display');
+  d2.pos = [600, 420]; graph.add(d2);
+
+  const t = LiteGraph.createNode('event/timer');
+  t.pos = [100, 600]; graph.add(t);
+
+  const d3 = LiteGraph.createNode('basic/display');
+  d3.pos = [350, 600]; graph.add(d3);
+
+  const n4 = LiteGraph.createNode('basic/number');
+  n4.pos = [100, 750]; n4.setProperty('value', -5); graph.add(n4);
+
+  const abs = LiteGraph.createNode('math/abs');
+  abs.pos = [350, 750]; graph.add(abs);
+
+  const d4 = LiteGraph.createNode('basic/display');
+  d4.pos = [600, 750]; graph.add(d4);
+
+  n1.connect(0, m, 0);
+  n2.connect(0, m, 1);
+  m.connect(0, d, 0);
+  n3.connect(0, mul, 0);
+  n3.connect(0, mul, 1);
+  mul.connect(0, d2, 0);
+  t.connect(0, d3, 0);
+  n4.connect(0, abs, 0);
+  abs.connect(0, d4, 0);
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -23,60 +282,26 @@ export default function Home() {
   const [nodeCount, setNodeCount] = useState(0);
   const [showCodePanel, setShowCodePanel] = useState(false);
   const [codePanelTab, setCodePanelTab] = useState<'original' | 'refactored'>('refactored');
-  const graphCanvasRef = useRef<any>(null);
-  const graphRef = useRef<any>(null);
+  const graphCanvasRef = useRef<LGraphCanvas | null>(null);
+  const graphRef = useRef<LGraph | null>(null);
 
   useEffect(() => {
-    if (!canvasRef.current) return;
-
-    // Load the original library for the working demo
-    // (The ES6 refactored versions are in src/lib/litegraph/ for reference)
-    const script = document.createElement('script');
-    script.src = '/litegraph.original.js';
-    script.onload = () => {
-      initGraph();
-    };
-    document.head.appendChild(script);
-
-    // Load CSS
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = '/litegraph.css';
-    document.head.appendChild(link);
-
-    return () => {
-      if (graphCanvasRef.current) {
-        graphCanvasRef.current.stopRendering();
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function initGraph() {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-
     const container = containerRef.current;
-    if (container) {
-      canvas.width = container.clientWidth;
-      canvas.height = container.clientHeight;
-    }
+    if (!canvas || !container) return;
 
-    // @ts-ignore - litegraph loaded via script
-    const LiteGraph = window.LiteGraph;
-    if (!LiteGraph) return;
+    canvas.width = container.clientWidth;
+    canvas.height = container.clientHeight;
 
-    // Create graph
-    const graph = new LiteGraph.LGraph();
+    // Create graph using ES6 refactored LGraph class
+    const graph = new LGraph();
     graphRef.current = graph;
 
-    // Create canvas controller
-    const graphCanvas = new LiteGraph.LGraphCanvas(canvas, graph, {
-      autoresize: true,
-    });
+    // Create canvas controller using ES6 refactored LGraphCanvas class
+    const graphCanvas = new LGraphCanvas(canvas, graph, { autoresize: true });
     graphCanvasRef.current = graphCanvas;
 
-    // Configure canvas
+    // Configure canvas appearance
     graphCanvas.background_image = null;
     graphCanvas.clear_background_color = '#1a1a2e';
     graphCanvas.render_shadows = true;
@@ -84,188 +309,13 @@ export default function Home() {
     graphCanvas.render_curved_connections = true;
     graphCanvas.links_render_mode = LiteGraph.SPLINE_LINK;
 
-    // ===== Register Custom Node Types (ES6 Class Style Demo) =====
-    // These demonstrate the new pattern: class extends LGraphNode
-
-    // Number Node
-    function NumberNode() {
-      this.addOutput('value', 'number');
-      this.addProperty('value', 1.0, 'number');
-      this.addWidget('number', 'Value', 1.0, (v: number) => { this.properties.value = v; });
-      this.serialize_widgets = true;
-    }
-    NumberNode.title = 'Number';
-    NumberNode.desc = 'Constant number';
-    NumberNode.prototype.onExecute = function() {
-      this.setOutputData(0, parseFloat(this.properties.value));
-    };
-    LiteGraph.registerNodeType('basic/number', NumberNode);
-
-    // Math Operation Node
-    function MathNode() {
-      this.addInput('A', 'number');
-      this.addInput('B', 'number');
-      this.addOutput('=', 'number');
-      this.addProperty('OP', '+', 'enum', { values: ['+', '-', '*', '/', '%', '^', 'max', 'min'] });
-      this.addWidget('combo', 'Op', '+', (v: string) => { this.properties.OP = v; }, { values: ['+', '-', '*', '/', '%', '^', 'max', 'min'] });
-      this.serialize_widgets = true;
-    }
-    MathNode.title = 'Math';
-    MathNode.desc = 'Math operation';
-    MathNode.prototype.onExecute = function() {
-      const A = this.getInputData(0) || 0;
-      const B = this.getInputData(1) || 0;
-      let r = 0;
-      switch (this.properties.OP) {
-        case '+': r = A + B; break;
-        case '-': r = A - B; break;
-        case '*': r = A * B; break;
-        case '/': r = B !== 0 ? A / B : 0; break;
-        case '%': r = A % B; break;
-        case '^': r = Math.pow(A, B); break;
-        case 'max': r = Math.max(A, B); break;
-        case 'min': r = Math.min(A, B); break;
-        default: r = A + B;
-      }
-      this.setOutputData(0, r);
-    };
-    LiteGraph.registerNodeType('math/math', MathNode);
-
-    // Display Node
-    function DisplayNode() {
-      this.addInput('value', 0);
-      this.addProperty('value', '', 'string');
-      this.size = [120, 60];
-    }
-    DisplayNode.title = 'Display';
-    DisplayNode.desc = 'Show value';
-    DisplayNode.prototype.onExecute = function() {
-      const v = this.getInputData(0);
-      if (v !== null && v !== undefined) {
-        this.properties.value = typeof v === 'object' ? JSON.stringify(v) : String(v);
-      }
-    };
-    DisplayNode.prototype.onDrawForeground = function(ctx: CanvasRenderingContext2D) {
-      ctx.fillStyle = '#CCC';
-      ctx.font = '12px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(this.properties.value || '—', this.size[0] * 0.5, this.size[1] * 0.5 + 4);
-    };
-    LiteGraph.registerNodeType('basic/display', DisplayNode);
-
-    // String Node
-    function StringNode() {
-      this.addOutput('text', 'string');
-      this.addProperty('value', 'hello', 'string');
-      this.addWidget('text', 'Text', 'hello', (v: string) => { this.properties.value = v; });
-      this.serialize_widgets = true;
-    }
-    StringNode.title = 'String';
-    StringNode.desc = 'String constant';
-    StringNode.prototype.onExecute = function() {
-      this.setOutputData(0, this.properties.value);
-    };
-    LiteGraph.registerNodeType('basic/string', StringNode);
-
-    // Compare Node
-    function CompareNode() {
-      this.addInput('A', 'number');
-      this.addInput('B', 'number');
-      this.addOutput('A>B', 'boolean');
-      this.addOutput('A==B', 'boolean');
-      this.addOutput('A<B', 'boolean');
-    }
-    CompareNode.title = 'Compare';
-    CompareNode.desc = 'Compare values';
-    CompareNode.prototype.onExecute = function() {
-      const A = this.getInputData(0) || 0;
-      const B = this.getInputData(1) || 0;
-      this.setOutputData(0, A > B);
-      this.setOutputData(1, A === B);
-      this.setOutputData(2, A < B);
-    };
-    LiteGraph.registerNodeType('logic/compare', CompareNode);
-
-    // Conditional Node
-    function ConditionalNode() {
-      this.addInput('cond', 'boolean');
-      this.addInput('true', 0);
-      this.addInput('false', 0);
-      this.addOutput('out', 0);
-    }
-    ConditionalNode.title = 'Conditional';
-    ConditionalNode.desc = 'If/else gate';
-    ConditionalNode.prototype.onExecute = function() {
-      this.setOutputData(0, this.getInputData(0) ? this.getInputData(1) : this.getInputData(2));
-    };
-    LiteGraph.registerNodeType('logic/conditional', ConditionalNode);
-
-    // Timer Node
-    function TimerNode() {
-      this.addOutput('time', 'number');
-      this.addOutput('delta', 'number');
-    }
-    TimerNode.title = 'Timer';
-    TimerNode.desc = 'Elapsed time';
-    TimerNode.prototype.onExecute = function() {
-      const now = this.graph ? this.graph.globaltime : 0;
-      this.setOutputData(0, now);
-      this.setOutputData(1, 0.016);
-    };
-    LiteGraph.registerNodeType('event/timer', TimerNode);
-
-    // Console Node
-    function ConsoleNode() {
-      this.addInput('log', 0);
-      this.addProperty('prefix', 'LOG:', 'string');
-      this.addWidget('text', 'Prefix', 'LOG:', (v: string) => { this.properties.prefix = v; });
-      this.serialize_widgets = true;
-    }
-    ConsoleNode.title = 'Console';
-    ConsoleNode.desc = 'Console log';
-    ConsoleNode.prototype.onExecute = function() {
-      const data = this.getInputData(0);
-      if (data !== null && data !== undefined) {
-        console.log(`[${this.properties.prefix}]`, data);
-      }
-    };
-    LiteGraph.registerNodeType('basic/console', ConsoleNode);
-
-    // Multiply Node
-    function MultiplyNode() {
-      this.addInput('A', 'number');
-      this.addInput('B', 'number');
-      this.addOutput('A*B', 'number');
-    }
-    MultiplyNode.title = 'Multiply';
-    MultiplyNode.prototype.onExecute = function() {
-      const A = this.getInputData(0) || 0;
-      const B = this.getInputData(1) || 0;
-      this.setOutputData(0, A * B);
-    };
-    LiteGraph.registerNodeType('math/multiply', MultiplyNode);
-
-    // Add Node
-    function AddNode() {
-      this.addInput('A', 'number');
-      this.addInput('B', 'number');
-      this.addOutput('A+B', 'number');
-    }
-    AddNode.title = 'Add';
-    AddNode.prototype.onExecute = function() {
-      const A = this.getInputData(0) || 0;
-      const B = this.getInputData(1) || 0;
-      this.setOutputData(0, A + B);
-    };
-    LiteGraph.registerNodeType('math/add', AddNode);
-
-    // ===== Create Demo Graph =====
-    createDemoGraph(graph, LiteGraph);
-
-    setNodeCount(graph._nodes.length);
+    // Create demo graph
+    createDemoGraph(graph);
+    // Use microtask to avoid synchronous setState in effect
+    queueMicrotask(() => setNodeCount(graph._nodes.length));
 
     // Handle resize
-    const resizeObserver = new ResizeObserver(() => {
+    const ro = new ResizeObserver(() => {
       if (container && canvas) {
         canvas.width = container.clientWidth;
         canvas.height = container.clientHeight;
@@ -273,134 +323,73 @@ export default function Home() {
         graphCanvas.setDirty(true, true);
       }
     });
-    if (container) {
-      resizeObserver.observe(container);
-    }
+    ro.observe(container);
 
-    // Start the graph
+    // Start graph execution
     graph.start();
-  }
+    queueMicrotask(() => setIsRunning(true));
 
-  function createDemoGraph(graph: any, LiteGraph: any) {
-    // Create some nodes with connections to demonstrate the graph
-    const numNode1 = LiteGraph.createNode('basic/number');
-    numNode1.pos = [100, 100];
-    numNode1.setProperty('value', 42);
-    graph.add(numNode1);
+    return () => {
+      graph.stop();
+      graphCanvas.stopRendering();
+      ro.disconnect();
+    };
+  }, []);
 
-    const numNode2 = LiteGraph.createNode('basic/number');
-    numNode2.pos = [100, 280];
-    numNode2.setProperty('value', 8);
-    graph.add(numNode2);
-
-    const mathNode = LiteGraph.createNode('math/math');
-    mathNode.pos = [350, 160];
-    graph.add(mathNode);
-
-    const displayNode = LiteGraph.createNode('basic/display');
-    displayNode.pos = [600, 180];
-    graph.add(displayNode);
-
-    const numNode3 = LiteGraph.createNode('basic/number');
-    numNode3.pos = [100, 450];
-    numNode3.setProperty('value', 3.14);
-    graph.add(numNode3);
-
-    const multiplyNode = LiteGraph.createNode('math/multiply');
-    multiplyNode.pos = [350, 400];
-    graph.add(multiplyNode);
-
-    const displayNode2 = LiteGraph.createNode('basic/display');
-    displayNode2.pos = [600, 420];
-    graph.add(displayNode2);
-
-    const timerNode = LiteGraph.createNode('event/timer');
-    timerNode.pos = [100, 600];
-    graph.add(timerNode);
-
-    const displayNode3 = LiteGraph.createNode('basic/display');
-    displayNode3.pos = [350, 600];
-    graph.add(displayNode3);
-
-    // Connect nodes
-    numNode1.connect(0, mathNode, 0);
-    numNode2.connect(0, mathNode, 1);
-    mathNode.connect(0, displayNode, 0);
-    numNode3.connect(0, multiplyNode, 0);
-    numNode3.connect(0, multiplyNode, 1);
-    multiplyNode.connect(0, displayNode2, 0);
-    timerNode.connect(0, displayNode3, 0);
-  }
-
-  const handlePlayStop = () => {
+  const handlePlayStop = useCallback(() => {
     const graph = graphRef.current;
     if (!graph) return;
-
-    if (isRunning) {
-      graph.stop();
-    } else {
-      graph.start();
-    }
+    if (isRunning) { graph.stop(); } else { graph.start(); }
     setIsRunning(!isRunning);
-  };
+  }, [isRunning]);
 
-  const handleAddNode = () => {
+  const handleAddNode = useCallback(() => {
     const graph = graphRef.current;
-    const LiteGraph = (window as any).LiteGraph;
-    if (!graph || !LiteGraph) return;
-
-    const types = ['basic/number', 'math/math', 'basic/display', 'basic/string', 'logic/compare', 'event/timer'];
+    if (!graph) return;
+    const types = ['basic/number', 'math/math', 'basic/display', 'basic/string', 'logic/compare', 'event/timer', 'math/multiply', 'math/add', 'math/abs', 'math/clamp'];
     const type = types[Math.floor(Math.random() * types.length)];
     const node = LiteGraph.createNode(type);
     if (!node) return;
-
-    // Place in center of view
     const gc = graphCanvasRef.current;
-    if (gc) {
-      node.pos = [gc.graph_mouse[0] + Math.random() * 200, gc.graph_mouse[1] + Math.random() * 200];
-    } else {
-      node.pos = [300 + Math.random() * 200, 200 + Math.random() * 200];
-    }
+    node.pos = gc ? [gc.graph_mouse[0] + Math.random() * 200, gc.graph_mouse[1] + Math.random() * 200] : [300 + Math.random() * 200, 200 + Math.random() * 200];
     graph.add(node);
     setNodeCount(graph._nodes.length);
-  };
+  }, []);
 
-  const handleClear = () => {
+  const handleClear = useCallback(() => {
     const graph = graphRef.current;
     if (!graph) return;
     graph.clear();
     setNodeCount(0);
-  };
+  }, []);
 
-  const handleLoadDemo = () => {
-    const graph = graphRef.current;
-    const LiteGraph = (window as any).LiteGraph;
-    if (!graph || !LiteGraph) return;
-    graph.clear();
-    createDemoGraph(graph, LiteGraph);
-    setNodeCount(graph._nodes.length);
-  };
-
-  const handleArrange = () => {
+  const handleLoadDemo = useCallback(() => {
     const graph = graphRef.current;
     if (!graph) return;
-    graph.arrange();
+    graph.clear();
+    createDemoGraph(graph);
+    setNodeCount(graph._nodes.length);
+  }, []);
+
+  const handleArrange = useCallback(() => {
+    const graph = graphRef.current;
     const gc = graphCanvasRef.current;
+    if (!graph) return;
+    graph.arrange();
     if (gc) gc.setDirty(true, true);
-  };
+  }, []);
 
   const codeExamples = {
     original: `// ===== 原始 litegraph.js (IIFE + Prototype) =====
 
 (function(global) {
 
-  // 1. LiteGraph 是一个普通对象字面量
+  // LiteGraph 是一个普通对象字面量
   var LiteGraph = (global.LiteGraph = {
     VERSION: 0.4,
     NODE_TITLE_HEIGHT: 30,
     registered_node_types: {},
-    // ... 大量常量和配置
-    
+
     registerNodeType: function(type, base_class) {
       // Mixin 模式：复制 LGraphNode.prototype 方法
       for (var i in LGraphNode.prototype) {
@@ -412,51 +401,50 @@ export default function Home() {
     },
   });
 
-  // 2. LGraph 是构造函数 + prototype
+  // LGraph 是构造函数 + prototype
   function LGraph(o) {
     this.list_of_graphcanvas = null;
     this.clear();
     if (o) this.configure(o);
   }
-  
+
   LGraph.prototype.start = function(interval) {
-    // ... 使用 var, function expressions
     var that = this;
     this.execution_timer_id = setInterval(function() {
       that.runStep(1, !that.catch_errors);
     }, interval);
   };
 
-  // 3. LGraphNode 用 _ctor 模式
-  function LGraphNode(title) {
-    this._ctor(title);
-  }
-  
+  // LGraphNode 用 _ctor 模式 + Object.defineProperty
+  function LGraphNode(title) { this._ctor(title); }
+
   LGraphNode.prototype._ctor = function(title) {
     this.title = title || "Unnamed";
     this._pos = new Float32Array(10, 10);
-    // Object.defineProperty 定义 getter/setter
     Object.defineProperty(this, "pos", {
       set: function(v) { this._pos[0] = v[0]; this._pos[1] = v[1]; },
       get: function() { return this._pos; },
     });
   };
 
-  // 4. 节点注册使用 Mixin 模式
-  function MyCustomNode() {
-    this.addOutput("value", "number");
-  }
+  // 节点注册使用 Mixin 模式
+  function MyCustomNode() { this.addOutput("value", "number"); }
   MyCustomNode.prototype.onExecute = function() {
     this.setOutputData(0, 42);
   };
-  // Mixin: registerNodeType 复制 LGraphNode 方法到 MyCustomNode
   LiteGraph.registerNodeType("custom/node", MyCustomNode);
 
 })(this);`,
 
     refactored: `// ===== 重构后 (ES6 Class + Modules) =====
+// 本页面直接使用 ES6 重构模块！
 
-// 1. LiteGraph 变为带有 static 成员的类
+import { LiteGraph } from "./LiteGraph.js";
+import { LGraph } from "./LGraph.js";
+import { LGraphNode } from "./LGraphNode.js";
+import { LGraphCanvas } from "./LGraphCanvas.js";
+
+// 1. LiteGraph → static class
 class LiteGraphClass {
   static VERSION = 0.4;
   static NODE_TITLE_HEIGHT = 30;
@@ -464,14 +452,11 @@ class LiteGraphClass {
 
   static registerNodeType(type, baseClass) {
     // ES6 继承：节点必须 extends LGraphNode
-    if (!(baseClass.prototype instanceof LGraphNode)) {
-      console.warn("Node should extend LGraphNode");
-    }
     this.registered_node_types[type] = baseClass;
   }
 }
 
-// 2. LGraph 变为 ES6 class
+// 2. LGraph → ES6 class
 class LGraph {
   constructor(o) {
     this.list_of_graphcanvas = null;
@@ -480,37 +465,32 @@ class LGraph {
   }
 
   start(interval) {
-    // const/let, 箭头函数
     this.execution_timer_id = setInterval(() => {
       this.runStep(1, !this.catch_errors);
     }, interval);
   }
 }
 
-// 3. LGraphNode 用 ES6 class + get/set
+// 3. LGraphNode → ES6 class + get/set
 class LGraphNode {
   constructor(title) {
     this.title = title || "Unnamed";
     this._pos = new Float32Array([10, 10]);
   }
 
-  // ES6 getter/setter 替代 Object.defineProperty
-  get pos() {
-    return this._pos;
-  }
+  get pos() { return this._pos; }
   set pos(v) {
     if (!v || v.length < 2) return;
     this._pos[0] = v[0];
     this._pos[1] = v[1];
   }
 
-  // Prototype methods → class methods
   connect(outputSlot, targetNode, inputSlot) { ... }
   serialize() { ... }
   configure(info) { ... }
 }
 
-// 4. 节点用 class extends 继承
+// 4. 节点用 class extends 继承 ✨
 class NumberNode extends LGraphNode {
   constructor() {
     super("Number");
@@ -525,9 +505,10 @@ class NumberNode extends LGraphNode {
 
 LiteGraph.registerNodeType("basic/number", NumberNode);
 
-// 5. 模块化导出
-export { LiteGraph, LGraph, LGraphNode };
-export default LiteGraph;`,
+// 5. 使用重构后的模块
+const graph = new LGraph();
+const canvas = new LGraphCanvas(canvasEl, graph);
+graph.start();  // 实时运行！`,
   };
 
   return (
@@ -544,7 +525,7 @@ export default LiteGraph;`,
             </div>
             <div>
               <h1 className="text-sm font-bold text-white tracking-tight">LiteGraph.js ES6 Refactored</h1>
-              <p className="text-[10px] text-gray-500">Node Graph Editor • ES6 Class Architecture</p>
+              <p className="text-[10px] text-gray-500">Node Graph Editor • 100% ES6 Class Architecture • Zero IIFE</p>
             </div>
           </div>
         </div>
@@ -614,6 +595,9 @@ export default LiteGraph;`,
             <div className="px-2 py-1 rounded bg-black/60 text-[10px] text-gray-400 backdrop-blur-sm">
               Right-click → Add Node | Drag → Connect | Scroll → Zoom | Space+Drag → Pan
             </div>
+            <div className="px-2 py-1 rounded bg-emerald-500/20 text-[10px] text-emerald-400 backdrop-blur-sm border border-emerald-500/30">
+              ✨ Powered by ES6 Class Modules
+            </div>
           </div>
         </div>
 
@@ -630,7 +614,7 @@ export default LiteGraph;`,
                     : 'text-gray-500 hover:text-gray-300'
                 }`}
               >
-                ES6 Class (重构后)
+                ES6 Class (重构后) ✨
               </button>
               <button
                 onClick={() => setCodePanelTab('original')}

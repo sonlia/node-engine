@@ -1,14 +1,47 @@
 /**
- * LiteGraph ES6 Module - Barrel Export
+ * LiteGraph ES6 Module - Barrel Export with Lazy Registration
  * 
- * Re-exports all refactored ES6 classes from the litegraph.js library.
- * 
- * Refactoring Summary:
- * - Original: IIFE pattern with global scope, constructor functions, prototype chains
- * - Refactored: ES6 classes with proper inheritance, module imports/exports
- * - Key change: Mixin pattern (copying LGraphNode.prototype) → proper `extends LGraphNode`
+ * All classes are registered onto the LiteGraph object here
+ * to avoid circular dependency issues at module evaluation time.
  */
 
+import { LiteGraph, LiteGraphClass } from "./LiteGraph.js";
+import { LGraphNode } from "./LGraphNode.js";
+import { LGraph } from "./LGraph.js";
+import { LLink } from "./LLink.js";
+import { LGraphGroup } from "./LGraphGroup.js";
+import { DragAndScale } from "./DragAndScale.js";
+import { LGraphCanvas } from "./LGraphCanvas.js";
+import { ContextMenu } from "./ContextMenu.js";
+
+// ===== Lazy Registration =====
+// These assignments must happen AFTER all modules are imported
+// to avoid circular dependency errors during module evaluation.
+
+LiteGraph._LGraphNode = LGraphNode;
+LiteGraph.LGraph = LGraph;
+LiteGraph.LLink = LLink;
+LiteGraph.LGraphGroup = LGraphGroup;
+LiteGraph.LGraphCanvas = LGraphCanvas;
+LiteGraph.DragAndScale = DragAndScale;
+LiteGraph.ContextMenu = ContextMenu;
+
+// Process any pending node type registrations that happened before
+// _LGraphNode was set (e.g., nodes registered in page.tsx at module level)
+if (LiteGraph._pendingRegistrations) {
+  for (const baseClass of LiteGraph._pendingRegistrations) {
+    if (!(baseClass.prototype instanceof LGraphNode)) {
+      for (const i in LGraphNode.prototype) {
+        if (baseClass.prototype[i] === undefined) {
+          baseClass.prototype[i] = LGraphNode.prototype[i];
+        }
+      }
+    }
+  }
+  delete LiteGraph._pendingRegistrations;
+}
+
+// Re-export everything
 export { LiteGraph, LiteGraphClass } from "./LiteGraph.js";
 export { LGraphNode } from "./LGraphNode.js";
 export { LGraph } from "./LGraph.js";

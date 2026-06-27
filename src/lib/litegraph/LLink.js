@@ -53,4 +53,7 @@ export class LLink {
   }
 }
 
+// Lazy registration to avoid circular dependency issues
+// LiteGraph.LLink will be set after all modules are loaded
+export { LLink };
 export default LLink;

@@ -1083,8 +1083,8 @@ class LGraphNode {
   }
 }
 
-// Set the circular reference back to LiteGraph
-LiteGraph._LGraphNode = LGraphNode;
+// Lazy registration to avoid circular dependency issues
+// LiteGraph._LGraphNode will be set after all modules are loaded
 
 export { LGraphNode };
 export default LGraphNode;

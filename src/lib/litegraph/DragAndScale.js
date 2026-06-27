@@ -323,5 +323,6 @@ class DragAndScale {
     }
 }
 
+// Lazy registration to avoid circular dependency issues
 export { DragAndScale };
 export default DragAndScale;

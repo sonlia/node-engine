@@ -111,5 +111,6 @@ class LGraphGroup {
   }
 }
 
+// Lazy registration to avoid circular dependency issues
 export { LGraphGroup };
 export default LGraphGroup;

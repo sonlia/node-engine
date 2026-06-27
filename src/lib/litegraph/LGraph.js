@@ -1557,5 +1557,7 @@ class LGraph {
   }
 }
 
+// Lazy registration to avoid circular dependency issues
+// LiteGraph.LGraph will be set after all modules are loaded
 export { LGraph };
 export default LGraph;

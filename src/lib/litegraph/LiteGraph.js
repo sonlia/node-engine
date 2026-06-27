@@ -179,17 +179,22 @@ class LiteGraphClass {
     // In ES6 refactored version, nodes MUST extend LGraphNode
     // We no longer do the mixin pattern, but we still verify the prototype chain
     const LGraphNode = LiteGraphClass._LGraphNode;
-    if (LGraphNode && !(baseClass.prototype instanceof LGraphNode)) {
-      console.warn(
-        `LiteGraph: Node class "${classname}" should extend LGraphNode. ` +
-        `Mixing in LGraphNode prototype methods for compatibility.`
-      );
-      // Fallback: mixin for backward compatibility
-      for (const i in LGraphNode.prototype) {
-        if (baseClass.prototype[i] === undefined) {
-          baseClass.prototype[i] = LGraphNode.prototype[i];
+    if (LGraphNode) {
+      if (!(baseClass.prototype instanceof LGraphNode)) {
+        // Fallback: mixin for backward compatibility
+        for (const i in LGraphNode.prototype) {
+          if (baseClass.prototype[i] === undefined) {
+            baseClass.prototype[i] = LGraphNode.prototype[i];
+          }
         }
       }
+    } else {
+      // LGraphNode not yet registered - mixin will happen later via index.js
+      // Store pending registration
+      if (!LiteGraphClass._pendingRegistrations) {
+        LiteGraphClass._pendingRegistrations = [];
+      }
+      LiteGraphClass._pendingRegistrations.push(baseClass);
     }
 
     const prev = LiteGraph.registered_node_types[type];

@@ -12,6 +12,7 @@
 import { LiteGraph } from "./LiteGraph.js";
 import { DragAndScale } from "./DragAndScale.js";
 import { ContextMenu } from "./ContextMenu.js";
+import { LGraphGroup } from "./LGraphGroup.js";
 import {
     clamp,
     distance,
@@ -544,7 +545,7 @@ class LGraphCanvas {
 
         if (!is_inside) return;
 
-        const node = this.graph.getNodeOnPos(
+        let node = this.graph.getNodeOnPos(
             e.canvasX,
             e.canvasY,
             this.visible_nodes,
@@ -2814,11 +2815,11 @@ class LGraphCanvas {
     drawNode(node, ctx) {
         this.current_node = node;
 
-        const color =
+        let color =
             node.color ||
             node.constructor.color ||
             LiteGraph.NODE_DEFAULT_COLOR;
-        const bgcolor =
+        let bgcolor =
             node.bgcolor ||
             node.constructor.bgcolor ||
             LiteGraph.NODE_DEFAULT_BGCOLOR;
@@ -5793,7 +5794,7 @@ class LGraphCanvas {
 
             const fApplyColor = (n) => {
                 if (color) {
-                    if (n.constructor === LiteGraph.LGraphGroup) {
+                    if (n.constructor === LGraphGroup) {
                         n.color = color.groupcolor;
                     } else {
                         n.color = color.color;
@@ -5866,37 +5867,1544 @@ class LGraphCanvas {
     static onGroupAdd(info, entry, mouseEvent) {
         const canvas = LGraphCanvas.active_canvas;
         const ref_window = canvas.getCanvasWindow();
-        const group = new LiteGraph.LGraphGroup();
+        const group = new LGraphGroup();
         group.pos = canvas.convertEventToCanvasOffset(mouseEvent);
         canvas.graph.add(group);
     }
 
-    // Stubs for static menu methods that reference other methods
-    static showMenuNodeOptionalInputs() {}
-    static showMenuNodeOptionalOutputs() {}
-    static onShowMenuNodeProperties() {}
-    static onShowPropertyEditor() {}
-    static onMenuResizeNode() {}
+    // ---------------------------------------------------------------------------
+    // resize
+    // ---------------------------------------------------------------------------
 
-    // Helper stubs
-    showLinkMenu(link, event) {}
-    showConnectionMenu(options) {}
-    createDefaultNodeForSlot(options) {}
-    showShowNodePanel(node) {}
-    showSubgraphPropertiesDialog(subnode) {}
-    showSubgraphPropertiesDialogRight(subnode) {}
-    createDialog(html, options) { return null; }
-    prompt(name, value, callback, event, multiline) {}
-    resize() {
-        if (!this.canvas) return;
-        if (this.autoresize) {
-            // autoresize handled by parent
+    /**
+     * resizes the canvas to a given size, if no size is passed, then it tries to fill the parentNode
+     * @method resize
+     **/
+    resize(width, height) {
+        if (!width && !height) {
+            const parent = this.canvas.parentNode;
+            width = parent.offsetWidth;
+            height = parent.offsetHeight;
         }
+
+        if (this.canvas.width == width && this.canvas.height == height) {
+            return;
+        }
+
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.bgcanvas.width = this.canvas.width;
+        this.bgcanvas.height = this.canvas.height;
+        this.setDirty(true, true);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Static menu methods
+    // ---------------------------------------------------------------------------
+
+    static showMenuNodeOptionalInputs(v, options, e, prev_menu, node) {
+        if (!node) {
+            return;
+        }
+
+        const canvas = LGraphCanvas.active_canvas;
+        const ref_window = canvas.getCanvasWindow();
+
+        let opts = node.optional_inputs;
+        if (node.onGetInputs) {
+            opts = node.onGetInputs();
+        }
+
+        const entries = [];
+        if (opts) {
+            for (let i = 0; i < opts.length; i++) {
+                const entry = opts[i];
+                if (!entry) {
+                    entries.push(null);
+                    continue;
+                }
+                let label = entry[0];
+                if (!entry[2]) entry[2] = {};
+
+                if (entry[2].label) {
+                    label = entry[2].label;
+                }
+
+                entry[2].removable = true;
+                const data = { content: label, value: entry };
+                if (entry[1] == LiteGraph.ACTION) {
+                    data.className = "event";
+                }
+                entries.push(data);
+            }
+        }
+
+        if (node.onMenuNodeInputs) {
+            const retEntries = node.onMenuNodeInputs(entries);
+            if (retEntries) { entries.length = 0; entries.push(...retEntries); }
+        }
+
+        if (!entries.length) {
+            console.log("no input entries");
+            return;
+        }
+
+        const menu = new ContextMenu(
+            entries,
+            {
+                event: e,
+                callback: inner_clicked,
+                parentMenu: prev_menu,
+                node: node
+            },
+            ref_window
+        );
+
+        function inner_clicked(v, e, prev) {
+            if (!node) {
+                return;
+            }
+
+            if (v.callback) {
+                v.callback.call(LGraphCanvas, node, v, e, prev);
+            }
+
+            if (v.value) {
+                node.graph.beforeChange();
+                node.addInput(v.value[0], v.value[1], v.value[2]);
+
+                if (node.onNodeInputAdd) { // callback to the node when adding a slot
+                    node.onNodeInputAdd(v.value);
+                }
+                node.setDirtyCanvas(true, true);
+                node.graph.afterChange();
+            }
+        }
+
+        return false;
+    }
+
+    static showMenuNodeOptionalOutputs(v, options, e, prev_menu, node) {
+        if (!node) {
+            return;
+        }
+
+        const canvas = LGraphCanvas.active_canvas;
+        const ref_window = canvas.getCanvasWindow();
+
+        let opts = node.optional_outputs;
+        if (node.onGetOutputs) {
+            opts = node.onGetOutputs();
+        }
+
+        let entries = [];
+        if (opts) {
+            for (let i = 0; i < opts.length; i++) {
+                const entry = opts[i];
+                if (!entry) {
+                    //separator?
+                    entries.push(null);
+                    continue;
+                }
+
+                if (
+                    node.flags &&
+                    node.flags.skip_repeated_outputs &&
+                    node.findOutputSlot(entry[0]) != -1
+                ) {
+                    continue;
+                } //skip the ones already on
+                let label = entry[0];
+                if (!entry[2]) entry[2] = {};
+                if (entry[2].label) {
+                    label = entry[2].label;
+                }
+                entry[2].removable = true;
+                const data = { content: label, value: entry };
+                if (entry[1] == LiteGraph.EVENT) {
+                    data.className = "event";
+                }
+                entries.push(data);
+            }
+        }
+
+        if (this.onMenuNodeOutputs) {
+            entries = this.onMenuNodeOutputs(entries);
+        }
+        if (LiteGraph.do_add_triggers_slots) { //canvas.allow_addOutSlot_onExecuted
+            if (node.findOutputSlot("onExecuted") == -1) {
+                entries.push({ content: "On Executed", value: ["onExecuted", LiteGraph.EVENT, { nameLocked: true }], className: "event" }); //, opts: {}
+            }
+        }
+        // add callback for modifing the menu elements onMenuNodeOutputs
+        if (node.onMenuNodeOutputs) {
+            const retEntries = node.onMenuNodeOutputs(entries);
+            if (retEntries) { entries.length = 0; entries.push(...retEntries); }
+        }
+
+        if (!entries.length) {
+            return;
+        }
+
+        const menu = new ContextMenu(
+            entries,
+            {
+                event: e,
+                callback: inner_clicked,
+                parentMenu: prev_menu,
+                node: node
+            },
+            ref_window
+        );
+
+        function inner_clicked(v, e, prev) {
+            if (!node) {
+                return;
+            }
+
+            if (v.callback) {
+                v.callback.call(LGraphCanvas, node, v, e, prev);
+            }
+
+            if (!v.value) {
+                return;
+            }
+
+            const value = v.value[1];
+
+            if (
+                value &&
+                (value.constructor === Object || value.constructor === Array)
+            ) {
+                //submenu why?
+                const subEntries = [];
+                for (const i in value) {
+                    subEntries.push({ content: i, value: value[i] });
+                }
+                new ContextMenu(subEntries, {
+                    event: e,
+                    callback: inner_clicked,
+                    parentMenu: prev_menu,
+                    node: node
+                });
+                return false;
+            } else {
+                node.graph.beforeChange();
+                node.addOutput(v.value[0], v.value[1], v.value[2]);
+
+                if (node.onNodeOutputAdd) { // a callback to the node when adding a slot
+                    node.onNodeOutputAdd(v.value);
+                }
+                node.setDirtyCanvas(true, true);
+                node.graph.afterChange();
+            }
+        }
+
+        return false;
+    }
+
+    static onShowMenuNodeProperties(value, options, e, prev_menu, node) {
+        if (!node || !node.properties) {
+            return;
+        }
+
+        const canvas = LGraphCanvas.active_canvas;
+        const ref_window = canvas.getCanvasWindow();
+
+        const entries = [];
+        for (const i in node.properties) {
+            let propValue = node.properties[i] !== undefined ? node.properties[i] : " ";
+            if (typeof propValue == "object")
+                propValue = JSON.stringify(propValue);
+            const info = node.getPropertyInfo(i);
+            if (info.type == "enum" || info.type == "combo")
+                propValue = LGraphCanvas.getPropertyPrintableValue(propValue, info.values);
+
+            //value could contain invalid html characters, clean that
+            propValue = LGraphCanvas.decodeHTML(propValue);
+            entries.push({
+                content:
+                    "<span class='property_name'>" +
+                    (info.label ? info.label : i) +
+                    "</span>" +
+                    "<span class='property_value'>" +
+                    propValue +
+                    "</span>",
+                value: i
+            });
+        }
+        if (!entries.length) {
+            return;
+        }
+
+        const menu = new ContextMenu(
+            entries,
+            {
+                event: e,
+                callback: inner_clicked,
+                parentMenu: prev_menu,
+                allow_html: true,
+                node: node
+            },
+            ref_window
+        );
+
+        function inner_clicked(v, options, e, prev) {
+            if (!node) {
+                return;
+            }
+            const rect = this.getBoundingClientRect();
+            canvas.showEditPropertyValue(node, v.value, {
+                position: [rect.left, rect.top]
+            });
+        }
+
+        return false;
+    }
+
+    static onShowPropertyEditor(item, options, e, menu, node) {
+        const property = item.property || "title";
+        let value = node[property];
+
+        // TODO refactor :: use createDialog ?
+
+        const dialog = document.createElement("div");
+        dialog.is_modified = false;
+        dialog.className = "graphdialog";
+        dialog.innerHTML =
+            "<span class='name'></span><input autofocus type='text' class='value'/><button>OK</button>";
+        dialog.close = function () {
+            if (dialog.parentNode) {
+                dialog.parentNode.removeChild(dialog);
+            }
+        };
+        const title = dialog.querySelector(".name");
+        title.innerText = property;
+        const input = dialog.querySelector(".value");
+        if (input) {
+            input.value = value;
+            input.addEventListener("blur", function (e) {
+                this.focus();
+            });
+            input.addEventListener("keydown", function (e) {
+                dialog.is_modified = true;
+                if (e.keyCode == 27) {
+                    //ESC
+                    dialog.close();
+                } else if (e.keyCode == 13) {
+                    inner(); // save
+                } else if (e.keyCode != 13 && e.target.localName != "textarea") {
+                    return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        }
+
+        const graphcanvas = LGraphCanvas.active_canvas;
+        const canvas = graphcanvas.canvas;
+
+        const rect = canvas.getBoundingClientRect();
+        let offsetx = -20;
+        let offsety = -20;
+        if (rect) {
+            offsetx -= rect.left;
+            offsety -= rect.top;
+        }
+
+        if (event) {
+            dialog.style.left = event.clientX + offsetx + "px";
+            dialog.style.top = event.clientY + offsety + "px";
+        } else {
+            dialog.style.left = canvas.width * 0.5 + offsetx + "px";
+            dialog.style.top = canvas.height * 0.5 + offsety + "px";
+        }
+
+        const button = dialog.querySelector("button");
+        button.addEventListener("click", inner);
+        canvas.parentNode.appendChild(dialog);
+
+        if (input) input.focus();
+
+        let dialogCloseTimer = null;
+        dialog.addEventListener("mouseleave", function (e) {
+            if (LiteGraph.dialog_close_on_mouse_leave)
+                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+        });
+        dialog.addEventListener("mouseenter", function (e) {
+            if (LiteGraph.dialog_close_on_mouse_leave)
+                if (dialogCloseTimer) clearTimeout(dialogCloseTimer);
+        });
+
+        function inner() {
+            if (input) setValue(input.value);
+        }
+
+        function setValue(value) {
+            if (item.type == "Number") {
+                value = Number(value);
+            } else if (item.type == "Boolean") {
+                value = Boolean(value);
+            }
+            node[property] = value;
+            if (dialog.parentNode) {
+                dialog.parentNode.removeChild(dialog);
+            }
+            node.setDirtyCanvas(true, true);
+        }
+    }
+
+    static onMenuResizeNode(value, options, e, menu, node) {
+        if (!node) {
+            return;
+        }
+
+        const fApplyMultiNode = function (node) {
+            node.size = node.computeSize();
+            if (node.onResize)
+                node.onResize(node.size);
+        };
+
+        const graphcanvas = LGraphCanvas.active_canvas;
+        if (!graphcanvas.selected_nodes || Object.keys(graphcanvas.selected_nodes).length <= 1) {
+            fApplyMultiNode(node);
+        } else {
+            for (const i in graphcanvas.selected_nodes) {
+                fApplyMultiNode(graphcanvas.selected_nodes[i]);
+            }
+        }
+
+        node.setDirtyCanvas(true, true);
+    }
+
+    static getPropertyPrintableValue(value, values) {
+        if (!values)
+            return String(value);
+
+        if (values.constructor === Array) {
+            return String(value);
+        }
+
+        if (values.constructor === Object) {
+            let desc_value = "";
+            for (const k in values) {
+                if (values[k] != value)
+                    continue;
+                desc_value = k;
+                break;
+            }
+            return String(value) + " (" + desc_value + ")";
+        }
+    }
+
+    static decodeHTML(str) {
+        const e = document.createElement("div");
+        e.innerText = str;
+        return e.innerHTML;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Instance menu / dialog methods
+    // ---------------------------------------------------------------------------
+
+    showLinkMenu(link, event) {
+        const node_left = this.graph.getNodeById(link.origin_id);
+        const node_right = this.graph.getNodeById(link.target_id);
+        let fromType = false;
+        if (node_left && node_left.outputs && node_left.outputs[link.origin_slot]) fromType = node_left.outputs[link.origin_slot].type;
+        let destType = false;
+        if (node_right && node_right.outputs && node_right.outputs[link.target_slot]) destType = node_right.inputs[link.target_slot].type;
+
+        const options = ["Add Node", null, "Delete", null];
+
+        const menu = new ContextMenu(options, {
+            event: event,
+            title: link.data != null ? link.data.constructor.name : null,
+            callback: inner_clicked
+        });
+
+        const graph = this.graph;
+        function inner_clicked(v, options, e) {
+            switch (v) {
+                case "Add Node":
+                    LGraphCanvas.onMenuAdd(null, null, e, menu, function (node) {
+                        if (!node.inputs || !node.inputs.length || !node.outputs || !node.outputs.length) {
+                            return;
+                        }
+                        // leave the connection type checking inside connectByType
+                        if (node_left.connectByType(link.origin_slot, node, fromType)) {
+                            node.connectByType(link.target_slot, node_right, destType);
+                            node.pos[0] -= node.size[0] * 0.5;
+                        }
+                    });
+                    break;
+
+                case "Delete":
+                    graph.removeLink(link.id);
+                    break;
+                default:
+                    /*var nodeCreated = createDefaultNodeForSlot({   nodeFrom: node_left
+                                                                                    ,slotFrom: link.origin_slot
+                                                                                    ,nodeTo: node
+                                                                                    ,slotTo: link.target_slot
+                                                                                    ,e: e
+                                                                                    ,nodeType: "AUTO"
+                                                                            });
+                    if(nodeCreated) console.log("new node in beetween "+v+" created");*/
+            }
+        }
+
+        return false;
+    }
+
+    createDefaultNodeForSlot(optPass) { // addNodeMenu for connection
+        optPass = optPass || {};
+        const opts = Object.assign({
+            nodeFrom: null // input
+            , slotFrom: null // input
+            , nodeTo: null   // output
+            , slotTo: null   // output
+            , position: []       // pass the event coords
+            , nodeType: null // choose a nodetype to add, AUTO to set at first good
+            , posAdd: [0, 0]   // adjust x,y
+            , posSizeFix: [0, 0] // alpha, adjust the position x,y based on the new node size w,h
+        }
+            , optPass
+        );
+
+        const isFrom = opts.nodeFrom && opts.slotFrom !== null;
+        const isTo = !isFrom && opts.nodeTo && opts.slotTo !== null;
+
+        if (!isFrom && !isTo) {
+            console.warn("No data passed to createDefaultNodeForSlot " + opts.nodeFrom + " " + opts.slotFrom + " " + opts.nodeTo + " " + opts.slotTo);
+            return false;
+        }
+        if (!opts.nodeType) {
+            console.warn("No type to createDefaultNodeForSlot");
+            return false;
+        }
+
+        const nodeX = isFrom ? opts.nodeFrom : opts.nodeTo;
+        let slotX = isFrom ? opts.slotFrom : opts.slotTo;
+
+        let iSlotConn = false;
+        switch (typeof slotX) {
+            case "string":
+                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX, false) : nodeX.findInputSlot(slotX, false);
+                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+                break;
+            case "object":
+                // ok slotX
+                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX.name) : nodeX.findInputSlot(slotX.name);
+                break;
+            case "number":
+                iSlotConn = slotX;
+                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+                break;
+            case "undefined":
+            default:
+                // bad ?
+                //iSlotConn = 0;
+                console.warn("Cant get slot information " + slotX);
+                return false;
+        }
+
+        if (slotX === false || iSlotConn === false) {
+            console.warn("createDefaultNodeForSlot bad slotX " + slotX + " " + iSlotConn);
+        }
+
+        // check for defaults nodes for this slottype
+        const fromSlotType = slotX.type == LiteGraph.EVENT ? "_event_" : slotX.type;
+        const slotTypesDefault = isFrom ? LiteGraph.slot_types_default_out : LiteGraph.slot_types_default_in;
+        if (slotTypesDefault && slotTypesDefault[fromSlotType]) {
+            if (slotX.link !== null) {
+                // is connected
+            } else {
+                // is not not connected
+            }
+            let nodeNewType = false;
+            if (typeof slotTypesDefault[fromSlotType] == "object" || typeof slotTypesDefault[fromSlotType] == "array") {
+                for (const typeX in slotTypesDefault[fromSlotType]) {
+                    if (opts.nodeType == slotTypesDefault[fromSlotType][typeX] || opts.nodeType == "AUTO") {
+                        nodeNewType = slotTypesDefault[fromSlotType][typeX];
+                        // console.log("opts.nodeType == slotTypesDefault[fromSlotType][typeX] :: "+opts.nodeType);
+                        break; // --------
+                    }
+                }
+            } else {
+                if (opts.nodeType == slotTypesDefault[fromSlotType] || opts.nodeType == "AUTO") nodeNewType = slotTypesDefault[fromSlotType];
+            }
+            if (nodeNewType) {
+                let nodeNewOpts = false;
+                if (typeof nodeNewType == "object" && nodeNewType.node) {
+                    nodeNewOpts = nodeNewType;
+                    nodeNewType = nodeNewType.node;
+                }
+
+                //that.graph.beforeChange();
+
+                const newNode = LiteGraph.createNode(nodeNewType);
+                if (newNode) {
+                    // if is object pass options
+                    if (nodeNewOpts) {
+                        if (nodeNewOpts.properties) {
+                            for (const i in nodeNewOpts.properties) {
+                                newNode.addProperty(i, nodeNewOpts.properties[i]);
+                            }
+                        }
+                        if (nodeNewOpts.inputs) {
+                            newNode.inputs = [];
+                            for (const i in nodeNewOpts.inputs) {
+                                newNode.addOutput(
+                                    nodeNewOpts.inputs[i][0],
+                                    nodeNewOpts.inputs[i][1]
+                                );
+                            }
+                        }
+                        if (nodeNewOpts.outputs) {
+                            newNode.outputs = [];
+                            for (const i in nodeNewOpts.outputs) {
+                                newNode.addOutput(
+                                    nodeNewOpts.outputs[i][0],
+                                    nodeNewOpts.outputs[i][1]
+                                );
+                            }
+                        }
+                        if (nodeNewOpts.title) {
+                            newNode.title = nodeNewOpts.title;
+                        }
+                        if (nodeNewOpts.json) {
+                            newNode.configure(nodeNewOpts.json);
+                        }
+                    }
+
+                    // add the node
+                    this.graph.add(newNode);
+                    newNode.pos = [
+                        opts.position[0] + opts.posAdd[0] + (opts.posSizeFix[0] ? opts.posSizeFix[0] * newNode.size[0] : 0)
+                        , opts.position[1] + opts.posAdd[1] + (opts.posSizeFix[1] ? opts.posSizeFix[1] * newNode.size[1] : 0)
+                    ]; //that.last_click_position; //[e.canvasX+30, e.canvasX+5];*/
+
+                    //that.graph.afterChange();
+
+                    // connect the two!
+                    if (isFrom) {
+                        opts.nodeFrom.connectByType(iSlotConn, newNode, fromSlotType);
+                    } else {
+                        opts.nodeTo.connectByTypeOutput(iSlotConn, newNode, fromSlotType);
+                    }
+
+                    // if connecting in between
+                    if (isFrom && isTo) {
+                        // TODO
+                    }
+
+                    return true;
+
+                } else {
+                    console.log("failed creating " + nodeNewType);
+                }
+            }
+        }
+        return false;
+    }
+
+    showConnectionMenu(optPass) { // addNodeMenu for connection
+        optPass = optPass || {};
+        const opts = Object.assign({
+            nodeFrom: null  // input
+            , slotFrom: null // input
+            , nodeTo: null   // output
+            , slotTo: null   // output
+            , e: null
+        }
+            , optPass
+        );
+
+        const isFrom = opts.nodeFrom && opts.slotFrom;
+        const isTo = !isFrom && opts.nodeTo && opts.slotTo;
+
+        if (!isFrom && !isTo) {
+            console.warn("No data passed to showConnectionMenu");
+            return false;
+        }
+
+        const nodeX = isFrom ? opts.nodeFrom : opts.nodeTo;
+        let slotX = isFrom ? opts.slotFrom : opts.slotTo;
+
+        let iSlotConn = false;
+        switch (typeof slotX) {
+            case "string":
+                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX, false) : nodeX.findInputSlot(slotX, false);
+                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+                break;
+            case "object":
+                // ok slotX
+                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX.name) : nodeX.findInputSlot(slotX.name);
+                break;
+            case "number":
+                iSlotConn = slotX;
+                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+                break;
+            default:
+                // bad ?
+                //iSlotConn = 0;
+                console.warn("Cant get slot information " + slotX);
+                return false;
+        }
+
+        const options = ["Add Node", null];
+
+        if (this.allow_searchbox) {
+            options.push("Search");
+            options.push(null);
+        }
+
+        // get defaults nodes for this slottype
+        const fromSlotType = slotX.type == LiteGraph.EVENT ? "_event_" : slotX.type;
+        const slotTypesDefault = isFrom ? LiteGraph.slot_types_default_out : LiteGraph.slot_types_default_in;
+        if (slotTypesDefault && slotTypesDefault[fromSlotType]) {
+            if (typeof slotTypesDefault[fromSlotType] == "object" || typeof slotTypesDefault[fromSlotType] == "array") {
+                for (const typeX in slotTypesDefault[fromSlotType]) {
+                    options.push(slotTypesDefault[fromSlotType][typeX]);
+                }
+            } else {
+                options.push(slotTypesDefault[fromSlotType]);
+            }
+        }
+
+        // build menu
+        const menu = new ContextMenu(options, {
+            event: opts.e,
+            title: (slotX && slotX.name != "" ? (slotX.name + (fromSlotType ? " | " : "")) : "") + (slotX && fromSlotType ? fromSlotType : ""),
+            callback: inner_clicked
+        });
+
+        const { showSearchBox, createDefaultNodeForSlot } = this;
+        // callback
+        function inner_clicked(v, options, e) {
+            //console.log("Process showConnectionMenu selection");
+            switch (v) {
+                case "Add Node":
+                    LGraphCanvas.onMenuAdd(null, null, e, menu, function (node) {
+                        if (isFrom) {
+                            opts.nodeFrom.connectByType(iSlotConn, node, fromSlotType);
+                        } else {
+                            opts.nodeTo.connectByTypeOutput(iSlotConn, node, fromSlotType);
+                        }
+                    });
+                    break;
+                case "Search":
+                    if (isFrom) {
+                        showSearchBox(e, { node_from: opts.nodeFrom, slot_from: slotX, type_filter_in: fromSlotType });
+                    } else {
+                        showSearchBox(e, { node_to: opts.nodeTo, slot_from: slotX, type_filter_out: fromSlotType });
+                    }
+                    break;
+                default:
+                    // check for defaults nodes for this slottype
+                    const nodeCreated = createDefaultNodeForSlot(Object.assign(opts, {
+                        position: [opts.e.canvasX, opts.e.canvasY]
+                        , nodeType: v
+                    }));
+                    if (nodeCreated) {
+                        // new node created
+                        //console.log("node "+v+" created")
+                    } else {
+                        // failed or v is not in defaults
+                    }
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    // refactor: there are different dialogs, some uses createDialog some dont
+    prompt(title, value, callback, event, multiline) {
+        title = title || "";
+
+        const dialog = document.createElement("div");
+        dialog.is_modified = false;
+        dialog.className = "graphdialog rounded";
+        if (multiline)
+            dialog.innerHTML = "<span class='name'></span> <textarea autofocus class='value'></textarea><button class='rounded'>OK</button>";
+        else
+            dialog.innerHTML = "<span class='name'></span> <input autofocus type='text' class='value'/><button class='rounded'>OK</button>";
+        dialog.close = () => {
+            this.prompt_box = null;
+            if (dialog.parentNode) {
+                dialog.parentNode.removeChild(dialog);
+            }
+        };
+
+        const graphcanvas = LGraphCanvas.active_canvas;
+        const canvas = graphcanvas.canvas;
+        canvas.parentNode.appendChild(dialog);
+
+        if (this.ds.scale > 1) {
+            dialog.style.transform = "scale(" + this.ds.scale + ")";
+        }
+
+        let dialogCloseTimer = null;
+        let prevent_timeout = false;
+        pointerListenerAdd(dialog, "leave", function (e) {
+            if (prevent_timeout)
+                return;
+            if (LiteGraph.dialog_close_on_mouse_leave)
+                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+        });
+        pointerListenerAdd(dialog, "enter", function (e) {
+            if (LiteGraph.dialog_close_on_mouse_leave)
+                if (dialogCloseTimer) clearTimeout(dialogCloseTimer);
+        });
+        const selInDia = dialog.querySelectorAll("select");
+        if (selInDia) {
+            // if filtering, check focus changed to comboboxes and prevent closing
+            selInDia.forEach(function (selIn) {
+                selIn.addEventListener("click", function (e) {
+                    prevent_timeout++;
+                });
+                selIn.addEventListener("blur", function (e) {
+                    prevent_timeout = 0;
+                });
+                selIn.addEventListener("change", function (e) {
+                    prevent_timeout = -1;
+                });
+            });
+        }
+
+        if (this.prompt_box) {
+            this.prompt_box.close();
+        }
+        this.prompt_box = dialog;
+
+        const name_element = dialog.querySelector(".name");
+        name_element.innerText = title;
+        const value_element = dialog.querySelector(".value");
+        value_element.value = value;
+
+        const input = value_element;
+        input.addEventListener("keydown", function (e) {
+            dialog.is_modified = true;
+            if (e.keyCode == 27) {
+                //ESC
+                dialog.close();
+            } else if (e.keyCode == 13 && e.target.localName != "textarea") {
+                if (callback) {
+                    callback(this.value);
+                }
+                dialog.close();
+            } else {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        const button = dialog.querySelector("button");
+        button.addEventListener("click", function (e) {
+            if (callback) {
+                callback(input.value);
+            }
+            this.setDirty(true);
+            dialog.close();
+        }.bind(this));
+
+        const rect = canvas.getBoundingClientRect();
+        let offsetx = -20;
+        let offsety = -20;
+        if (rect) {
+            offsetx -= rect.left;
+            offsety -= rect.top;
+        }
+
+        if (event) {
+            dialog.style.left = event.clientX + offsetx + "px";
+            dialog.style.top = event.clientY + offsety + "px";
+        } else {
+            dialog.style.left = canvas.width * 0.5 + offsetx + "px";
+            dialog.style.top = canvas.height * 0.5 + offsety + "px";
+        }
+
+        setTimeout(function () {
+            input.focus();
+        }, 10);
+
+        return dialog;
+    }
+
+    showEditPropertyValue(node, property, options) {
+        if (!node || node.properties[property] === undefined) {
+            return;
+        }
+
+        options = options || {};
+
+        const info = node.getPropertyInfo(property);
+        const type = info.type;
+
+        let input_html = "";
+
+        if (type == "string" || type == "number" || type == "array" || type == "object") {
+            input_html = "<input autofocus type='text' class='value'/>";
+        } else if ((type == "enum" || type == "combo") && info.values) {
+            input_html = "<select autofocus type='text' class='value'>";
+            for (const i in info.values) {
+                let v = i;
+                if (info.values.constructor === Array)
+                    v = info.values[i];
+
+                input_html +=
+                    "<option value='" +
+                    v +
+                    "' " +
+                    (v == node.properties[property] ? "selected" : "") +
+                    ">" +
+                    info.values[i] +
+                    "</option>";
+            }
+            input_html += "</select>";
+        } else if (type == "boolean" || type == "toggle") {
+            input_html =
+                "<input autofocus type='checkbox' class='value' " +
+                (node.properties[property] ? "checked" : "") +
+                "/>";
+        } else {
+            console.warn("unknown type: " + type);
+            return;
+        }
+
+        const dialog = this.createDialog(
+            "<span class='name'>" +
+            (info.label ? info.label : property) +
+            "</span>" +
+            input_html +
+            "<button>OK</button>",
+            options
+        );
+
+        let input = false;
+        if ((type == "enum" || type == "combo") && info.values) {
+            input = dialog.querySelector("select");
+            input.addEventListener("change", function (e) {
+                dialog.modified();
+                setValue(e.target.value);
+            });
+        } else if (type == "boolean" || type == "toggle") {
+            input = dialog.querySelector("input");
+            if (input) {
+                input.addEventListener("click", function (e) {
+                    dialog.modified();
+                    setValue(!!input.checked);
+                });
+            }
+        } else {
+            input = dialog.querySelector("input");
+            if (input) {
+                input.addEventListener("blur", function (e) {
+                    this.focus();
+                });
+
+                let v = node.properties[property] !== undefined ? node.properties[property] : "";
+                if (type !== 'string') {
+                    v = JSON.stringify(v);
+                }
+
+                input.value = v;
+                input.addEventListener("keydown", function (e) {
+                    if (e.keyCode == 27) {
+                        //ESC
+                        dialog.close();
+                    } else if (e.keyCode == 13) {
+                        // ENTER
+                        inner(); // save
+                    } else if (e.keyCode != 13) {
+                        dialog.modified();
+                        return;
+                    }
+                    e.preventDefault();
+                    e.stopPropagation();
+                });
+            }
+        }
+        if (input) input.focus();
+
+        const button = dialog.querySelector("button");
+        button.addEventListener("click", inner);
+
+        function inner() {
+            setValue(input.value);
+        }
+
+        function setValue(value) {
+            if (info && info.values && info.values.constructor === Object && info.values[value] != undefined)
+                value = info.values[value];
+
+            if (typeof node.properties[property] == "number") {
+                value = Number(value);
+            }
+            if (type == "array" || type == "object") {
+                value = JSON.parse(value);
+            }
+            node.properties[property] = value;
+            if (node.graph) {
+                node.graph._version++;
+            }
+            if (node.onPropertyChanged) {
+                node.onPropertyChanged(property, value);
+            }
+            if (options.onclose)
+                options.onclose();
+            dialog.close();
+            node.setDirtyCanvas(true, true);
+        }
+
+        return dialog;
+    }
+
+    // TODO refactor, there are different dialog, some uses createDialog, some dont
+    createDialog(html, options) {
+        const def_options = { checkForInput: false, closeOnLeave: true, closeOnLeave_checkModified: true };
+        options = Object.assign(def_options, options || {});
+
+        const dialog = document.createElement("div");
+        dialog.className = "graphdialog";
+        dialog.innerHTML = html;
+        dialog.is_modified = false;
+
+        const rect = this.canvas.getBoundingClientRect();
+        let offsetx = -20;
+        let offsety = -20;
+        if (rect) {
+            offsetx -= rect.left;
+            offsety -= rect.top;
+        }
+
+        if (options.position) {
+            offsetx += options.position[0];
+            offsety += options.position[1];
+        } else if (options.event) {
+            offsetx += options.event.clientX;
+            offsety += options.event.clientY;
+        } //centered
+        else {
+            offsetx += this.canvas.width * 0.5;
+            offsety += this.canvas.height * 0.5;
+        }
+
+        dialog.style.left = offsetx + "px";
+        dialog.style.top = offsety + "px";
+
+        this.canvas.parentNode.appendChild(dialog);
+
+        // check for input and use default behaviour: save on enter, close on esc
+        if (options.checkForInput) {
+            const aI = dialog.querySelectorAll("input");
+            let focused = false;
+            if (aI) {
+                aI.forEach(function (iX) {
+                    iX.addEventListener("keydown", function (e) {
+                        dialog.modified();
+                        if (e.keyCode == 27) {
+                            dialog.close();
+                        } else if (e.keyCode != 13) {
+                            return;
+                        }
+                        // set value ?
+                        e.preventDefault();
+                        e.stopPropagation();
+                    });
+                    if (!focused) iX.focus();
+                });
+            }
+        }
+
+        dialog.modified = function () {
+            dialog.is_modified = true;
+        };
+        dialog.close = function () {
+            if (dialog.parentNode) {
+                dialog.parentNode.removeChild(dialog);
+            }
+        };
+
+        let dialogCloseTimer = null;
+        let prevent_timeout = false;
+        dialog.addEventListener("mouseleave", function (e) {
+            if (prevent_timeout)
+                return;
+            if (options.closeOnLeave || LiteGraph.dialog_close_on_mouse_leave)
+                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+        });
+        dialog.addEventListener("mouseenter", function (e) {
+            if (options.closeOnLeave || LiteGraph.dialog_close_on_mouse_leave)
+                if (dialogCloseTimer) clearTimeout(dialogCloseTimer);
+        });
+        const selInDia = dialog.querySelectorAll("select");
+        if (selInDia) {
+            // if filtering, check focus changed to comboboxes and prevent closing
+            selInDia.forEach(function (selIn) {
+                selIn.addEventListener("click", function (e) {
+                    prevent_timeout++;
+                });
+                selIn.addEventListener("blur", function (e) {
+                    prevent_timeout = 0;
+                });
+                selIn.addEventListener("change", function (e) {
+                    prevent_timeout = -1;
+                });
+            });
+        }
+
+        return dialog;
+    }
+
+    createPanel(title, options) {
+        options = options || {};
+
+        const ref_window = options.window || window;
+        const root = document.createElement("div");
+        root.className = "litegraph dialog";
+        root.innerHTML = "<div class='dialog-header'><span class='dialog-title'></span></div><div class='dialog-content'></div><div style='display:none;' class='dialog-alt-content'></div><div class='dialog-footer'></div>";
+        root.header = root.querySelector(".dialog-header");
+
+        if (options.width)
+            root.style.width = options.width + (options.width.constructor === Number ? "px" : "");
+        if (options.height)
+            root.style.height = options.height + (options.height.constructor === Number ? "px" : "");
+        if (options.closable) {
+            const close = document.createElement("span");
+            close.innerHTML = "&#10005;";
+            close.classList.add("close");
+            close.addEventListener("click", function () {
+                root.close();
+            });
+            root.header.appendChild(close);
+        }
+        root.title_element = root.querySelector(".dialog-title");
+        root.title_element.innerText = title;
+        root.content = root.querySelector(".dialog-content");
+        root.alt_content = root.querySelector(".dialog-alt-content");
+        root.footer = root.querySelector(".dialog-footer");
+
+        root.close = function () {
+            if (root.onClose && typeof root.onClose == "function") {
+                root.onClose();
+            }
+            if (root.parentNode)
+                root.parentNode.removeChild(root);
+            /* XXX CHECK THIS */
+            if (this.parentNode) {
+                this.parentNode.removeChild(this);
+            }
+            /* XXX this was not working, was fixed with an IF, check this */
+        };
+
+        // function to swap panel content
+        root.toggleAltContent = function (force) {
+            let vTo, vAlt;
+            if (typeof force != "undefined") {
+                vTo = force ? "block" : "none";
+                vAlt = force ? "none" : "block";
+            } else {
+                vTo = root.alt_content.style.display != "block" ? "block" : "none";
+                vAlt = root.alt_content.style.display != "block" ? "none" : "block";
+            }
+            root.alt_content.style.display = vTo;
+            root.content.style.display = vAlt;
+        };
+
+        root.toggleFooterVisibility = function (force) {
+            let vTo;
+            if (typeof force != "undefined") {
+                vTo = force ? "block" : "none";
+            } else {
+                vTo = root.footer.style.display != "block" ? "block" : "none";
+            }
+            root.footer.style.display = vTo;
+        };
+
+        root.clear = function () {
+            this.content.innerHTML = "";
+        };
+
+        root.addHTML = function (code, classname, on_footer) {
+            const elem = document.createElement("div");
+            if (classname)
+                elem.className = classname;
+            elem.innerHTML = code;
+            if (on_footer)
+                root.footer.appendChild(elem);
+            else
+                root.content.appendChild(elem);
+            return elem;
+        };
+
+        root.addButton = function (name, callback, options) {
+            const elem = document.createElement("button");
+            elem.innerText = name;
+            elem.options = options;
+            elem.classList.add("btn");
+            elem.addEventListener("click", callback);
+            root.footer.appendChild(elem);
+            return elem;
+        };
+
+        root.addSeparator = function () {
+            const elem = document.createElement("div");
+            elem.className = "separator";
+            root.content.appendChild(elem);
+        };
+
+        root.addWidget = function (type, name, value, options, callback) {
+            options = options || {};
+            let str_value = String(value);
+            type = type.toLowerCase();
+            if (type == "number")
+                str_value = value.toFixed(3);
+
+            const elem = document.createElement("div");
+            elem.className = "property";
+            elem.innerHTML = "<span class='property_name'></span><span class='property_value'></span>";
+            elem.querySelector(".property_name").innerText = options.label || name;
+            const value_element = elem.querySelector(".property_value");
+            value_element.innerText = str_value;
+            elem.dataset["property"] = name;
+            elem.dataset["type"] = options.type || type;
+            elem.options = options;
+            elem.value = value;
+
+            if (type == "code")
+                elem.addEventListener("click", function (e) { root.inner_showCodePad(this.dataset["property"]); });
+            else if (type == "boolean") {
+                elem.classList.add("boolean");
+                if (value)
+                    elem.classList.add("bool-on");
+                elem.addEventListener("click", function () {
+                    const propname = this.dataset["property"];
+                    this.value = !this.value;
+                    this.classList.toggle("bool-on");
+                    this.querySelector(".property_value").innerText = this.value ? "true" : "false";
+                    innerChange(propname, this.value);
+                });
+            } else if (type == "string" || type == "number") {
+                value_element.setAttribute("contenteditable", true);
+                value_element.addEventListener("keydown", function (e) {
+                    if (e.code == "Enter" && (type != "string" || !e.shiftKey)) // allow for multiline
+                    {
+                        e.preventDefault();
+                        this.blur();
+                    }
+                });
+                value_element.addEventListener("blur", function () {
+                    let v = this.innerText;
+                    const propname = this.parentNode.dataset["property"];
+                    const proptype = this.parentNode.dataset["type"];
+                    if (proptype == "number")
+                        v = Number(v);
+                    innerChange(propname, v);
+                });
+            } else if (type == "enum" || type == "combo") {
+                str_value = LGraphCanvas.getPropertyPrintableValue(value, options.values);
+                value_element.innerText = str_value;
+
+                value_element.addEventListener("click", function (event) {
+                    const values = options.values || [];
+                    const propname = this.parentNode.dataset["property"];
+                    const clickedElem = event.currentTarget;
+                    const menu = new ContextMenu(values, {
+                        event: event,
+                        className: "dark",
+                        callback: inner_clicked
+                    },
+                        ref_window);
+                    function inner_clicked(v, option, event) {
+                        clickedElem.innerText = v;
+                        innerChange(propname, v);
+                        return false;
+                    }
+                });
+            }
+
+            root.content.appendChild(elem);
+
+            function innerChange(name, value) {
+                if (options.callback)
+                    options.callback(name, value, options);
+                if (callback)
+                    callback(name, value, options);
+            }
+
+            return elem;
+        };
+
+        if (root.onOpen && typeof root.onOpen == "function") root.onOpen();
+
+        return root;
+    }
+
+    closePanels() {
+        let panel = document.querySelector("#node-panel");
+        if (panel)
+            panel.close();
+        panel = document.querySelector("#option-panel");
+        if (panel)
+            panel.close();
+    }
+
+    showShowNodePanel(node) {
+        this.SELECTED_NODE = node;
+        this.closePanels();
+        const ref_window = this.getCanvasWindow();
+        const panel = this.createPanel(node.title || "", {
+            closable: true
+            , window: ref_window
+            , onOpen: () => {
+                this.NODEPANEL_IS_OPEN = true;
+            }
+            , onClose: () => {
+                this.NODEPANEL_IS_OPEN = false;
+                this.node_panel = null;
+            }
+        });
+        this.node_panel = panel;
+        panel.id = "node-panel";
+        panel.node = node;
+        panel.classList.add("settings");
+
+        function inner_refresh() {
+            panel.content.innerHTML = ""; //clear
+            panel.addHTML("<span class='node_type'>" + node.type + "</span><span class='node_desc'>" + (node.constructor.desc || "") + "</span><span class='separator'></span>");
+
+            panel.addHTML("<h3>Properties</h3>");
+
+            const fUpdate = (name, value) => {
+                this.graph.beforeChange(node);
+                switch (name) {
+                    case "Title":
+                        node.title = value;
+                        break;
+                    case "Mode":
+                        const kV = Object.values(LiteGraph.NODE_MODES).indexOf(value);
+                        if (kV >= 0 && LiteGraph.NODE_MODES[kV]) {
+                            node.changeMode(kV);
+                        } else {
+                            console.warn("unexpected mode: " + value);
+                        }
+                        break;
+                    case "Color":
+                        if (LGraphCanvas.node_colors[value]) {
+                            node.color = LGraphCanvas.node_colors[value].color;
+                            node.bgcolor = LGraphCanvas.node_colors[value].bgcolor;
+                        } else {
+                            console.warn("unexpected color: " + value);
+                        }
+                        break;
+                    default:
+                        node.setProperty(name, value);
+                        break;
+                }
+                this.graph.afterChange();
+                this.dirty_canvas = true;
+            };
+
+            panel.addWidget("string", "Title", node.title, {}, fUpdate);
+
+            panel.addWidget("combo", "Mode", LiteGraph.NODE_MODES[node.mode], { values: LiteGraph.NODE_MODES }, fUpdate);
+
+            let nodeCol = "";
+            if (node.color !== undefined) {
+                nodeCol = Object.keys(LGraphCanvas.node_colors).filter(function (nK) { return LGraphCanvas.node_colors[nK].color == node.color; });
+            }
+
+            panel.addWidget("combo", "Color", nodeCol, { values: Object.keys(LGraphCanvas.node_colors) }, fUpdate);
+
+            for (const pName in node.properties) {
+                const value = node.properties[pName];
+                const info = node.getPropertyInfo(pName);
+                const type = info.type || "string";
+
+                //in case the user wants control over the side panel widget
+                if (node.onAddPropertyToPanel && node.onAddPropertyToPanel(pName, panel))
+                    continue;
+
+                panel.addWidget(info.widget || info.type, pName, value, info, fUpdate);
+            }
+
+            panel.addSeparator();
+
+            if (node.onShowCustomPanelInfo)
+                node.onShowCustomPanelInfo(panel);
+
+            panel.footer.innerHTML = ""; // clear
+            panel.addButton("Delete", function () {
+                if (node.block_delete)
+                    return;
+                node.graph.remove(node);
+                panel.close();
+            }).classList.add("delete");
+        }
+
+        panel.inner_showCodePad = function (propname) {
+            panel.classList.remove("settings");
+            panel.classList.add("centered");
+
+            panel.alt_content.innerHTML = "<textarea class='code'></textarea>";
+            const textarea = panel.alt_content.querySelector("textarea");
+            const fDoneWith = function () {
+                panel.toggleAltContent(false);
+                panel.toggleFooterVisibility(true);
+                textarea.parentNode.removeChild(textarea);
+                panel.classList.add("settings");
+                panel.classList.remove("centered");
+                inner_refresh();
+            };
+            textarea.value = node.properties[propname];
+            textarea.addEventListener("keydown", function (e) {
+                if (e.code == "Enter" && e.ctrlKey) {
+                    node.setProperty(propname, textarea.value);
+                    fDoneWith();
+                }
+            });
+            panel.toggleAltContent(true);
+            panel.toggleFooterVisibility(false);
+            textarea.style.height = "calc(100% - 40px)";
+            const assign = panel.addButton("Assign", function () {
+                node.setProperty(propname, textarea.value);
+                fDoneWith();
+            });
+            panel.alt_content.appendChild(assign);
+            const button = panel.addButton("Close", fDoneWith);
+            button.style.float = "right";
+            panel.alt_content.appendChild(button);
+        };
+
+        inner_refresh();
+
+        this.canvas.parentNode.appendChild(panel);
+    }
+
+    showSubgraphPropertiesDialog(node) {
+        console.log("showing subgraph properties dialog");
+
+        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+        if (old_panel)
+            old_panel.close();
+
+        const panel = this.createPanel("Subgraph Inputs", { closable: true, width: 500 });
+        panel.node = node;
+        panel.classList.add("subgraph_dialog");
+
+        function inner_refresh() {
+            panel.clear();
+
+            //show currents
+            if (node.inputs)
+                for (let i = 0; i < node.inputs.length; ++i) {
+                    const input = node.inputs[i];
+                    if (input.not_subgraph_input)
+                        continue;
+                    const html = "<button>&#10005;</button> <span class='bullet_icon'></span><span class='name'></span><span class='type'></span>";
+                    const elem = panel.addHTML(html, "subgraph_property");
+                    elem.dataset["name"] = input.name;
+                    elem.dataset["slot"] = i;
+                    elem.querySelector(".name").innerText = input.name;
+                    elem.querySelector(".type").innerText = input.type;
+                    elem.querySelector("button").addEventListener("click", function (e) {
+                        node.removeInput(Number(this.parentNode.dataset["slot"]));
+                        inner_refresh();
+                    });
+                }
+        }
+
+        //add extra
+        const html = " + <span class='label'>Name</span><input class='name'/><span class='label'>Type</span><input class='type'></input><button>+</button>";
+        const elem = panel.addHTML(html, "subgraph_property extra", true);
+        elem.querySelector("button").addEventListener("click", function (e) {
+            const elem = this.parentNode;
+            const name = elem.querySelector(".name").value;
+            const type = elem.querySelector(".type").value;
+            if (!name || node.findInputSlot(name) != -1)
+                return;
+            node.addInput(name, type);
+            elem.querySelector(".name").value = "";
+            elem.querySelector(".type").value = "";
+            inner_refresh();
+        });
+
+        inner_refresh();
+        this.canvas.parentNode.appendChild(panel);
+        return panel;
+    }
+
+    showSubgraphPropertiesDialogRight(node) {
+        // console.log("showing subgraph properties dialog");
+        // old_panel if old_panel is exist close it
+        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+        if (old_panel)
+            old_panel.close();
+        // new panel
+        const panel = this.createPanel("Subgraph Outputs", { closable: true, width: 500 });
+        panel.node = node;
+        panel.classList.add("subgraph_dialog");
+
+        function inner_refresh() {
+            panel.clear();
+            //show currents
+            if (node.outputs)
+                for (let i = 0; i < node.outputs.length; ++i) {
+                    const input = node.outputs[i];
+                    if (input.not_subgraph_output)
+                        continue;
+                    const html = "<button>&#10005;</button> <span class='bullet_icon'></span><span class='name'></span><span class='type'></span>";
+                    const elem = panel.addHTML(html, "subgraph_property");
+                    elem.dataset["name"] = input.name;
+                    elem.dataset["slot"] = i;
+                    elem.querySelector(".name").innerText = input.name;
+                    elem.querySelector(".type").innerText = input.type;
+                    elem.querySelector("button").addEventListener("click", function (e) {
+                        node.removeOutput(Number(this.parentNode.dataset["slot"]));
+                        inner_refresh();
+                    });
+                }
+        }
+
+        //add extra
+        const html = " + <span class='label'>Name</span><input class='name'/><span class='label'>Type</span><input class='type'></input><button>+</button>";
+        const elem = panel.addHTML(html, "subgraph_property extra", true);
+        elem.querySelector(".name").addEventListener("keydown", function (e) {
+            if (e.keyCode == 13) {
+                addOutput.apply(this);
+            }
+        });
+        elem.querySelector("button").addEventListener("click", function (e) {
+            addOutput.apply(this);
+        });
+        function addOutput() {
+            const elem = this.parentNode;
+            const name = elem.querySelector(".name").value;
+            const type = elem.querySelector(".type").value;
+            if (!name || node.findOutputSlot(name) != -1)
+                return;
+            node.addOutput(name, type);
+            elem.querySelector(".name").value = "";
+            elem.querySelector(".type").value = "";
+            inner_refresh();
+        }
+
+        inner_refresh();
+        this.canvas.parentNode.appendChild(panel);
+        return panel;
     }
 }
 
 // Assign to LiteGraph for compatibility
-LiteGraph.LGraphCanvas = LGraphCanvas;
+// Lazy registration to avoid circular dependency issues
+// LiteGraph.LGraphCanvas will be set after all modules are loaded
 
 export { LGraphCanvas };
 export default LGraphCanvas;

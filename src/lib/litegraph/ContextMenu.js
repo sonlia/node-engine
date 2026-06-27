@@ -473,7 +473,7 @@ class ContextMenu {
 }
 
 // Register on LiteGraph for backwards compatibility
-LiteGraph.ContextMenu = ContextMenu;
+// Lazy registration to avoid circular dependency issues
 
 export { ContextMenu };
 export default ContextMenu;
