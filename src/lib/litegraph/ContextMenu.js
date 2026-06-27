@@ -10,6 +10,7 @@
  */
 
 import { LiteGraph } from "./LiteGraph.js";
+import { pointerListenerAdd, pointerListenerRemove } from "./utils.js";
 
 class ContextMenu {
     /**
@@ -81,7 +82,7 @@ class ContextMenu {
         }, 100); // delay so the mouse up event is not caught by this element
 
         // prevent the default browser context menu from opening
-        LiteGraph.pointerListenerAdd(
+        pointerListenerAdd(
             root,
             "up",
             function (e) {
@@ -104,7 +105,7 @@ class ContextMenu {
             true
         );
 
-        LiteGraph.pointerListenerAdd(
+        pointerListenerAdd(
             root,
             "down",
             (e) => {
@@ -157,7 +158,7 @@ class ContextMenu {
 
         // ---- cancel closing timer on mouse enter ----
         // (close-on-leave is commented out in the original but enter handler remains)
-        LiteGraph.pointerListenerAdd(root, "enter", function (e) {
+        pointerListenerAdd(root, "enter", function (e) {
             if (root.closing_timer) {
                 clearTimeout(root.closing_timer);
             }
@@ -352,7 +353,7 @@ class ContextMenu {
             element.addEventListener("click", inner_onclick);
         }
         if (!disabled && options.autoopen) {
-            LiteGraph.pointerListenerAdd(element, "enter", inner_over);
+            pointerListenerAdd(element, "enter", inner_over);
         }
 
         return element;

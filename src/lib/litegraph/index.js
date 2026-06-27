@@ -13,10 +13,15 @@ import { LGraphGroup } from "./LGraphGroup.js";
 import { DragAndScale } from "./DragAndScale.js";
 import { LGraphCanvas } from "./LGraphCanvas.js";
 import { ContextMenu } from "./ContextMenu.js";
+import { _setLiteGraphRef } from "./utils.js";
 
 // ===== Lazy Registration =====
 // These assignments must happen AFTER all modules are imported
 // to avoid circular dependency errors during module evaluation.
+
+// Set the LiteGraph reference in utils.js so pointerListenerAdd/Remove
+// can access LiteGraph.pointerevents_method without a circular import.
+_setLiteGraphRef(LiteGraph);
 
 LiteGraph._LGraphNode = LGraphNode;
 LiteGraph.LGraph = LGraph;
@@ -68,4 +73,5 @@ export {
   getParameterNames,
   pointerListenerAdd,
   pointerListenerRemove,
+  _setLiteGraphRef,
 } from "./utils.js";

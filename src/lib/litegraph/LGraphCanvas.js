@@ -440,8 +440,8 @@ class LGraphCanvas {
         const ref_window = this.getCanvasWindow();
         const doc = ref_window.document;
 
-        pointerListenerRemove(this.canvas, "move", this._mousedown_callback);
-        pointerListenerRemove(this.canvas, "up", this._mousedown_callback);
+        pointerListenerRemove(this.canvas, "move", this._mousemove_callback);
+        pointerListenerRemove(this.canvas, "up", this._mouseup_callback);
         pointerListenerRemove(this.canvas, "down", this._mousedown_callback);
         this.canvas.removeEventListener("mousewheel", this._mousewheel_callback);
         this.canvas.removeEventListener(

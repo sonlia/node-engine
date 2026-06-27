@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { LiteGraph } from '@/lib/litegraph/LiteGraph';
-import { LGraph } from '@/lib/litegraph/LGraph';
-import { LGraphNode } from '@/lib/litegraph/LGraphNode';
-import { LGraphCanvas } from '@/lib/litegraph/LGraphCanvas';
-import { LGraphGroup } from '@/lib/litegraph/LGraphGroup';
+import {
+  LiteGraph,
+  LGraph,
+  LGraphNode,
+  LGraphCanvas,
+  LGraphGroup,
+} from '@/lib/litegraph';
 
 // ===== Register all ES6 Class-based node types =====
 

@@ -126,6 +126,43 @@ export function getParameterNames(func) {
 }
 
 /**
+ * Lazy reference to LiteGraph, set by index.js after all modules load.
+ * This avoids circular dependency: utils.js → LiteGraph.js → utils.js
+ */
+let _liteGraphRef = null;
+
+/**
+ * Called from index.js to provide the LiteGraph reference.
+ * Must be invoked before any pointerListenerAdd/Remove calls at runtime.
+ */
+export function _setLiteGraphRef(ref) {
+  _liteGraphRef = ref;
+}
+
+/**
+ * Returns the current pointer events method ("pointer" or "mouse").
+ * Uses the lazy LiteGraph reference if available, defaults to "pointer".
+ */
+function _getPointereventsMethod() {
+  if (_liteGraphRef && _liteGraphRef.pointerevents_method) {
+    return _liteGraphRef.pointerevents_method;
+  }
+  return "pointer";
+}
+
+/**
+ * Construct the final DOM event name from a shorthand suffix.
+ * Known suffixes (down/up/move/over/out/enter) are prepended with the
+ * current pointer-events method ("pointer" → "pointerdown", etc.).
+ * Unknown event names pass through unchanged.
+ */
+function _resolvePointerEvent(event) {
+  const method = _getPointereventsMethod();
+  const knownSuffixes = ["down", "up", "move", "over", "out", "enter"];
+  return knownSuffixes.includes(event) ? method + event : event;
+}
+
+/**
  * Cross-platform pointer event listener binding.
  * Uses LiteGraph.pointerevents_method ("pointer" or "mouse") to construct
  * the event name by concatenating method + event suffix.
@@ -134,10 +171,7 @@ export function getParameterNames(func) {
  */
 export function pointerListenerAdd(target, event, handler, capture) {
   capture = capture || false;
-  const method = LiteGraph.pointerevents_method || "pointer";
-  // For known suffixes (down/up/move/over/out/enter), prepend the method
-  const knownSuffixes = ["down", "up", "move", "over", "out", "enter"];
-  const finalEvent = knownSuffixes.includes(event) ? method + event : event;
+  const finalEvent = _resolvePointerEvent(event);
   target.addEventListener(finalEvent, handler, capture);
 }
 
@@ -147,8 +181,6 @@ export function pointerListenerAdd(target, event, handler, capture) {
  */
 export function pointerListenerRemove(target, event, handler, capture) {
   capture = capture || false;
-  const method = LiteGraph.pointerevents_method || "pointer";
-  const knownSuffixes = ["down", "up", "move", "over", "out", "enter"];
-  const finalEvent = knownSuffixes.includes(event) ? method + event : event;
+  const finalEvent = _resolvePointerEvent(event);
   target.removeEventListener(finalEvent, handler, capture);
 }
