@@ -538,16 +538,19 @@ class LiteGraphClass {
     refWindow = refWindow || window;
     const elements = refWindow.document.querySelectorAll(".litecontextmenu");
     for (let i = 0; i < elements.length; i++) {
-      elements[i].close();
+      if (elements[i].close) elements[i].close();
+      else if (elements[i].parentNode) elements[i].parentNode.removeChild(elements[i]);
     }
     // Also close panels
     const panels = refWindow.document.querySelectorAll(".litepanel");
     for (let i = 0; i < panels.length; i++) {
-      panels[i].close();
+      if (panels[i].close) panels[i].close();
+      else if (panels[i].parentNode) panels[i].parentNode.removeChild(panels[i]);
     }
     const dialogs = refWindow.document.querySelectorAll(".litedialog");
     for (let i = 0; i < dialogs.length; i++) {
-      dialogs[i].close();
+      if (dialogs[i].close) dialogs[i].close();
+      else if (dialogs[i].parentNode) dialogs[i].parentNode.removeChild(dialogs[i]);
     }
   }
 

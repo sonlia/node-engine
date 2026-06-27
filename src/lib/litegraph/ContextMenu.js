@@ -136,6 +136,11 @@ class ContextMenu {
 
         this.root = root;
 
+        // Attach the close method to the DOM element so that
+        // LiteGraph.closeAllContextMenus() can call elements[i].close()
+        // (it queries the DOM by class name, not by class instance)
+        root.close = this.close.bind(this);
+
         // ---- optional title ----
         if (options.title) {
             const element = document.createElement("div");
