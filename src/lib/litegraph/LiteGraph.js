@@ -478,10 +478,20 @@ class LiteGraphClass {
    * Check if two slot types are compatible for connection
    */
   static isValidConnection(typeA, typeB) {
+    // 0, null, undefined, or "*" means "any type" (wildcard)
+    if (
+      typeA === 0 || typeA === null || typeA === undefined ||
+      typeB === 0 || typeB === null || typeB === undefined
+    ) {
+      return true;
+    }
+
     if (
       typeA === "" ||
       typeB === "" ||
       typeA === typeB ||
+      typeA === "*" ||
+      typeB === "*" ||
       (typeA === LiteGraph.EVENT && typeB === LiteGraph.ACTION) ||
       (typeA === LiteGraph.ACTION && typeB === LiteGraph.EVENT)
     ) {
