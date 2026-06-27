@@ -13,7 +13,24 @@ import { LGraphGroup } from "./LGraphGroup.js";
 import { DragAndScale } from "./DragAndScale.js";
 import { LGraphCanvas } from "./LGraphCanvas.js";
 import { ContextMenu } from "./ContextMenu.js";
-import { _setLiteGraphRef, pointerListenerAdd, pointerListenerRemove } from "./utils.js";
+import {
+  _setLiteGraphRef,
+  pointerListenerAdd,
+  pointerListenerRemove,
+  compareObjects,
+  distance,
+  colorToString,
+  isInsideRectangle,
+  growBounding,
+  isInsideBounding,
+  overlapBounding,
+  hex2num,
+  num2hex,
+  getTime,
+  cloneObject,
+  uuidv4,
+  getParameterNames,
+} from "./utils.js";
 
 // ===== Lazy Registration =====
 // These assignments must happen AFTER all modules are imported
@@ -31,10 +48,26 @@ LiteGraph.LGraphCanvas = LGraphCanvas;
 LiteGraph.DragAndScale = DragAndScale;
 LiteGraph.ContextMenu = ContextMenu;
 
-// Register utility functions on LiteGraph for API compatibility
-// (In original code, these were properties of the LiteGraph object)
+// Register utility functions on LiteGraph for API compatibility.
+// In the original IIFE every one of these helpers was attached to the
+// global LiteGraph object (e.g. `LiteGraph.compareObjects(...)`). Without
+// these re-attachments, external callers that use the `LiteGraph.X(...)`
+// form would silently get `undefined` and crash at runtime.
 LiteGraph.pointerListenerAdd = pointerListenerAdd;
 LiteGraph.pointerListenerRemove = pointerListenerRemove;
+LiteGraph.compareObjects = compareObjects;
+LiteGraph.distance = distance;
+LiteGraph.colorToString = colorToString;
+LiteGraph.isInsideRectangle = isInsideRectangle;
+LiteGraph.growBounding = growBounding;
+LiteGraph.isInsideBounding = isInsideBounding;
+LiteGraph.overlapBounding = overlapBounding;
+LiteGraph.hex2num = hex2num;
+LiteGraph.num2hex = num2hex;
+LiteGraph.getTime = getTime;
+LiteGraph.cloneObject = cloneObject;
+LiteGraph.uuidv4 = uuidv4;
+LiteGraph.getParameterNames = getParameterNames;
 
 // Process any pending node type registrations that happened before
 // _LGraphNode was set (e.g., nodes registered in page.tsx at module level)

@@ -35,11 +35,14 @@ export function colorToString(c) {
 }
 
 export function isInsideRectangle(x, y, left, top, width, height) {
+  // Match the original strict-< boundary semantics so points exactly on
+  // the left/top edge are NOT considered inside (this is what every
+  // hit-test in the original code relies on).
   return (
-    x >= left &&
-    x < left + width &&
-    y >= top &&
-    y < top + height
+    left < x &&
+    left + width > x &&
+    top < y &&
+    top + height > y
   );
 }
 
@@ -50,13 +53,25 @@ export function growBounding(bounding, x, y) {
   else if (y > bounding[3]) bounding[3] = y;
 }
 
+/**
+ * Tests whether point `p` lies inside the bounding box `bb`.
+ *
+ * NOTE: matches the ORIGINAL litegraph.js calling convention where `bb`
+ * is a NESTED array: `[[minx, miny], [maxx, maxy]]`. (Earlier refactored
+ * versions expected a flat `[minx, miny, maxx, maxy]` tuple, which silently
+ * broke every caller that passed the original format.) Boundary semantics
+ * match the original: a point exactly on the min edge is INSIDE, a point
+ * exactly on the max edge is OUTSIDE.
+ */
 export function isInsideBounding(p, bb) {
-  return (
-    p[0] >= bb[0] &&
-    p[1] >= bb[1] &&
-    p[0] <= bb[2] &&
-    p[1] <= bb[3]
-  );
+  if (
+    p[0] < bb[0][0] ||
+    p[1] < bb[0][1] ||
+    p[0] > bb[1][0] ||
+    p[1] > bb[1][1]
+  )
+    return false;
+  return true;
 }
 
 export function overlapBounding(a, b) {

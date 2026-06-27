@@ -235,9 +235,27 @@ class LGraphNode {
   }
 
   setProperty(name, value) {
+    if (!this.properties) this.properties = {};
+    // No-op short-circuit: avoid firing callbacks when nothing changed.
+    if (value === this.properties[name]) return;
+    const prevValue = this.properties[name];
     this.properties[name] = value;
     if (this.onPropertyChanged) {
-      this.onPropertyChanged(name, value);
+      // Allow the handler to veto (return false) and revert the change.
+      if (this.onPropertyChanged(name, value, prevValue) === false) {
+        this.properties[name] = prevValue;
+      }
+    }
+    // Keep any bound widget in sync with the new property value.
+    if (this.widgets) {
+      for (let i = 0; i < this.widgets.length; ++i) {
+        const w = this.widgets[i];
+        if (!w) continue;
+        if (w.options && w.options.property === name) {
+          w.value = value;
+          break;
+        }
+      }
     }
   }
 
@@ -275,14 +293,15 @@ class LGraphNode {
     if (!this.outputs) return;
     if (slot >= 0 && slot < this.outputs.length) {
       const output = this.outputs[slot];
+      // Original keeps both an `_data` debug copy on the output slot AND
+      // propagates the value to every live link's `.data` field. Downstream
+      // nodes read it back via `getInputData` → `link.data`.
       output._data = data;
-      // Propagate data to all connected links so that
-      // downstream nodes can read it via getInputData → link._data
       if (output.links && this.graph) {
         for (let i = 0; i < output.links.length; i++) {
           const link = this.graph.links[output.links[i]];
           if (link) {
-            link._data = data;
+            link.data = data;
           }
         }
       }
@@ -292,24 +311,37 @@ class LGraphNode {
   setOutputDataType(slot, type) {
     if (!this.outputs) return;
     if (slot >= 0 && slot < this.outputs.length) {
-      this.outputs[slot]._type = type;
-    }
-  }
-
-  getInputData(slot) {
-    if (!this.inputs) return undefined;
-    if (slot >= 0 && slot < this.inputs.length) {
-      const input = this.inputs[slot];
-      if (!input) return null;
-      const linkId = input.link;
-      if (linkId != null) {
-        const link = this.graph ? this.graph.links[linkId] : null;
-        if (link) {
-          return link._data;
+      const output = this.outputs[slot];
+      output.type = type;
+      // Mirror the type onto every live link so downstream type inference
+      // (getInputDataType) keeps working after a runtime type change.
+      if (output.links && this.graph) {
+        for (let i = 0; i < output.links.length; i++) {
+          const link = this.graph.links[output.links[i]];
+          if (link) {
+            link.type = type;
+          }
         }
       }
     }
-    return null;
+  }
+
+  getInputData(slot, force_update) {
+    if (!this.inputs) return;
+    if (slot >= this.inputs.length || this.inputs[slot].link == null) return;
+
+    const linkId = this.inputs[slot].link;
+    const link = this.graph ? this.graph.links[linkId] : null;
+    if (!link) return null;
+
+    if (!force_update) return link.data;
+
+    // Pull fresh data from the upstream node.
+    const node = this.graph.getNodeById(link.origin_id);
+    if (!node) return link.data;
+    if (node.updateOutputData) node.updateOutputData(link.origin_slot);
+    else if (node.onExecute) node.onExecute();
+    return link.data;
   }
 
   getInputDataType(slot) {
@@ -318,10 +350,15 @@ class LGraphNode {
       const input = this.inputs[slot];
       if (!input) return null;
       const linkId = input.link;
-      if (linkId != null) {
-        const link = this.graph ? this.graph.links[linkId] : null;
+      if (linkId != null && this.graph) {
+        const link = this.graph.links[linkId];
         if (link) {
-          return link.type;
+          // Original looks up the *upstream output slot's* type so a
+          // runtime type change on the source is reflected here.
+          const node = this.graph.getNodeById(link.origin_id);
+          if (node && node.outputs && node.outputs[link.origin_slot]) {
+            return node.outputs[link.origin_slot].type;
+          }
         }
       }
       return input.type;
@@ -329,14 +366,11 @@ class LGraphNode {
     return null;
   }
 
-  getInputDataByName(name) {
+  getInputDataByName(name, force_update) {
     if (!this.inputs) return null;
-    for (let i = 0; i < this.inputs.length; ++i) {
-      if (name === this.inputs[i].name) {
-        return this.getInputData(i);
-      }
-    }
-    return null;
+    const slot = this.findInputSlot(name);
+    if (slot === -1) return null;
+    return this.getInputData(slot, force_update);
   }
 
   isInputConnected(slot) {
@@ -453,8 +487,19 @@ class LGraphNode {
   removeInput(slot) {
     this.disconnectInput(slot);
     const input = this.inputs.splice(slot, 1)[0];
+    // Reindex links still attached to higher-indexed inputs so they keep
+    // pointing at the right slot — matches the original behaviour.
+    if (this.inputs && this.graph) {
+      for (let i = slot; i < this.inputs.length; ++i) {
+        const input = this.inputs[i];
+        if (!input || input.link == null) continue;
+        const link = this.graph.links[input.link];
+        if (link) link.target_slot -= 1;
+      }
+    }
     this.setSize(this.computeSize());
-    if (this.onInputRemoved) this.onInputRemoved(input, slot);
+    if (this.onInputRemoved) this.onInputRemoved(slot, input && input.name);
+    this.setDirtyCanvas(true, true);
     return input;
   }
 
@@ -486,8 +531,22 @@ class LGraphNode {
   removeOutput(slot) {
     this.disconnectOutput(slot);
     const output = this.outputs.splice(slot, 1)[0];
+    // Reindex links still attached to higher-indexed outputs so they keep
+    // pointing at the right slot — otherwise the graph structure corrupts
+    // after a slot is removed.
+    if (this.outputs && this.graph) {
+      for (let i = slot; i < this.outputs.length; ++i) {
+        const output = this.outputs[i];
+        if (!output || !output.links) continue;
+        for (let j = 0; j < output.links.length; ++j) {
+          const link = this.graph.links[output.links[j]];
+          if (link) link.origin_slot -= 1;
+        }
+      }
+    }
     this.setSize(this.computeSize());
-    if (this.onOutputRemoved) this.onOutputRemoved(output, slot);
+    if (this.onOutputRemoved) this.onOutputRemoved(slot);
+    this.setDirtyCanvas(true, true);
     return output;
   }
 

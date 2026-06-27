@@ -2558,9 +2558,13 @@ class LGraphCanvas {
                 ctx.fill();
 
                 ctx.fillStyle = "#ffcc00";
+                // `shape` declared outside both blocks so the highlight-output branch
+                // can read the value set by the highlight-input branch (matches the
+                // original `var shape` function-scoped behaviour).
+                let shape = null;
                 if (this._highlight_input) {
                     ctx.beginPath();
-                    const shape = this._highlight_input_slot
+                    shape = this._highlight_input_slot
                         ? this._highlight_input_slot.shape
                         : null;
                     if (shape === LiteGraph.ARROW_SHAPE) {
@@ -4900,7 +4904,7 @@ class LGraphCanvas {
             if (text.constructor === String) {
                 ctx.fillStyle = textcolor;
                 ctx.textAlign = "center";
-                ctx.font = (h * 0.65) | 0 + "px Arial";
+                ctx.font = ((h * 0.65) | 0) + "px Arial";
                 ctx.fillText(text, x + w * 0.5, y + h * 0.75);
                 ctx.textAlign = "left";
             }

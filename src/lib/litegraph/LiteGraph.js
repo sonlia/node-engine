@@ -427,8 +427,11 @@ class LiteGraphClass {
 
   /**
    * Factory: create a node instance by type string
+   * Restored original signature `(type, title, options)` and the full set
+   * of post-construction initialization (properties, flags, size, pos,
+   * mode, options spread, onNodeCreated callback).
    */
-  static createNode(type) {
+  static createNode(type, title, options) {
     const baseClass = LiteGraph.registered_node_types[type];
     if (!baseClass) {
       if (LiteGraph.debug) {
@@ -436,12 +439,43 @@ class LiteGraphClass {
       }
       return null;
     }
-    const node = new baseClass();
+    title = title || baseClass.title || type;
+
+    let node = null;
+    if (LiteGraph.catch_exceptions) {
+      try {
+        node = new baseClass(title);
+      } catch (err) {
+        console.error(err);
+        return null;
+      }
+    } else {
+      node = new baseClass(title);
+    }
+
     node.type = type;
-    if (!node.title) node.title = type;
+    if (!node.title && title) node.title = title;
+    if (!node.properties) node.properties = {};
+    if (!node.properties_info) node.properties_info = [];
+    if (!node.flags) node.flags = {};
+    if (!node.size) node.size = node.computeSize();
+    if (!node.pos) node.pos = LiteGraph.DEFAULT_POSITION.concat();
+    if (!node.mode) node.mode = LiteGraph.ALWAYS;
+
+    if (options) {
+      for (const i in options) {
+        node[i] = options[i];
+      }
+    }
+
     if (LiteGraph.use_uuids) {
       node.id = uuidv4();
     }
+
+    if (node.onNodeCreated) {
+      node.onNodeCreated();
+    }
+
     return node;
   }
 
@@ -453,31 +487,39 @@ class LiteGraphClass {
   }
 
   /**
-   * Get all node types in a category
+   * Get all node types in a category.
+   * Restored original `filter` semantics: `filter` is a value compared
+   * against each type's `.filter` property via `!=` (not a predicate).
    */
   static getNodeTypesInCategory(category, filter) {
     const r = [];
     for (const i in LiteGraph.registered_node_types) {
       const type = LiteGraph.registered_node_types[i];
-      if (category === "") {
-        if (type.category == null) r.push(type);
-      } else if (type.category === category) {
-        if (!filter || filter(type)) r.push(type);
+      if (type.category == null) {
+        if (category === "") r.push(type);
+      } else if (category === type.category) {
+        if (filter == null || type.filter == filter) r.push(type);
       }
     }
     if (LiteGraph.auto_sort_node_types) {
-      r.sort((a, b) => a.title.localeCompare(b.title));
+      r.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
     }
     return r;
   }
 
   /**
-   * Get all node type categories
+   * Get all node type categories.
+   * Restored original behaviour: respects the per-type `skip_list` flag
+   * and the value-equality `filter` parameter.
    */
-  static getNodeTypesCategories() {
-    const categories = { "": true };
+  static getNodeTypesCategories(filter) {
+    const categories = { "": 1 };
     for (const i in LiteGraph.registered_node_types) {
-      categories[LiteGraph.registered_node_types[i].category || ""] = true;
+      const type = LiteGraph.registered_node_types[i];
+      if (type.category && !type.skip_list) {
+        if (type.filter != filter) continue;
+        categories[type.category] = 1;
+      }
     }
     const result = Object.keys(categories);
     if (LiteGraph.auto_sort_node_types) {
@@ -490,7 +532,10 @@ class LiteGraphClass {
    * Check if two slot types are compatible for connection
    */
   static isValidConnection(typeA, typeB) {
-    // 0, null, undefined, or "*" means "any type" (wildcard)
+    // Normalize "" / "*" to 0 (wildcard / any type). 0 already means any.
+    if (typeA === "" || typeA === "*") typeA = 0;
+    if (typeB === "" || typeB === "*") typeB = 0;
+    // Wildcard short-circuit (covers 0, null, undefined).
     if (
       typeA === 0 || typeA === null || typeA === undefined ||
       typeB === 0 || typeB === null || typeB === undefined
@@ -499,25 +544,35 @@ class LiteGraphClass {
     }
 
     if (
-      typeA === "" ||
-      typeB === "" ||
       typeA === typeB ||
-      typeA === "*" ||
-      typeB === "*" ||
       (typeA === LiteGraph.EVENT && typeB === LiteGraph.ACTION) ||
       (typeA === LiteGraph.ACTION && typeB === LiteGraph.EVENT)
     ) {
       return true;
     }
+
     // Enforce string comparison
     typeA = String(typeA);
     typeB = String(typeB);
     if (typeA.toLowerCase() === typeB.toLowerCase()) return true;
 
-    // Check subtypes
-    const baseA = typeA.split(",")[0];
-    const baseB = typeB.split(",")[0];
-    if (baseA === baseB) return true;
+    // Multi-type slots: comma-separated type lists. A connection is valid
+    // when ANY permutation of the two lists is itself valid. (Earlier
+    // refactored versions only compared `split(",")[0]`, which silently
+    // rejected overlapping multi-type slots like "string,number" vs
+    // "number,float".)
+    if (typeA.indexOf(",") !== -1 || typeB.indexOf(",") !== -1) {
+      const supportedA = typeA.split(",");
+      const supportedB = typeB.split(",");
+      for (let i = 0; i < supportedA.length; ++i) {
+        for (let j = 0; j < supportedB.length; ++j) {
+          if (LiteGraph.isValidConnection(supportedA[i], supportedB[j])) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
 
     return false;
   }
@@ -580,9 +635,32 @@ class LiteGraphClass {
    * Extend class (copy prototype properties)
    */
   static extendClass(target, origin) {
+    // Copy own static properties from origin to target (skip ones target
+    // already owns, mirroring the original `hasOwnProperty` guard).
     for (const i in origin) {
       if (target[i] === undefined) {
         target[i] = origin[i];
+      }
+    }
+    // Copy prototype properties (including getters/setters) so subclassing
+    // via `LiteGraph.extendClass(Sub, LGraphNode)` actually inherits methods.
+    if (origin.prototype) {
+      for (const i in origin.prototype) {
+        if (!Object.prototype.hasOwnProperty.call(origin.prototype, i))
+          continue;
+        if (Object.prototype.hasOwnProperty.call(target.prototype, i))
+          continue;
+        const getter = origin.prototype.__lookupGetter__(i);
+        const setter = origin.prototype.__lookupSetter__(i);
+        if (getter) {
+          target.prototype.__defineGetter__(i, getter);
+        }
+        if (setter) {
+          target.prototype.__defineSetter__(i, setter);
+        }
+        if (!getter && !setter) {
+          target.prototype[i] = origin.prototype[i];
+        }
       }
     }
   }

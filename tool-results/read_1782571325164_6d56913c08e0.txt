@@ -1,0 +1,702 @@
+  8351→    LGraphCanvas.prototype.drawBackCanvas = function() {
+  8352→        var canvas = this.bgcanvas;
+  8353→        if (
+  8354→            canvas.width != this.canvas.width ||
+  8355→            canvas.height != this.canvas.height
+  8356→        ) {
+  8357→            canvas.width = this.canvas.width;
+  8358→            canvas.height = this.canvas.height;
+  8359→        }
+  8360→
+  8361→        if (!this.bgctx) {
+  8362→            this.bgctx = this.bgcanvas.getContext("2d");
+  8363→        }
+  8364→        var ctx = this.bgctx;
+  8365→        if (ctx.start) {
+  8366→            ctx.start();
+  8367→        }
+  8368→
+  8369→                var viewport = this.viewport || [0,0,ctx.canvas.width,ctx.canvas.height];
+  8370→
+  8371→        //clear
+  8372→        if (this.clear_background) {
+  8373→            ctx.clearRect( viewport[0], viewport[1], viewport[2], viewport[3] );
+  8374→        }
+  8375→
+  8376→                //show subgraph stack header
+  8377→        if (this._graph_stack && this._graph_stack.length) {
+  8378→            ctx.save();
+  8379→            var parent_graph = this._graph_stack[this._graph_stack.length - 1];
+  8380→            var subgraph_node = this.graph._subgraph_node;
+  8381→            ctx.strokeStyle = subgraph_node.bgcolor;
+  8382→            ctx.lineWidth = 10;
+  8383→            ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+  8384→            ctx.lineWidth = 1;
+  8385→            ctx.font = "40px Arial";
+  8386→            ctx.textAlign = "center";
+  8387→            ctx.fillStyle = subgraph_node.bgcolor || "#AAA";
+  8388→            var title = "";
+  8389→            for (var i = 1; i < this._graph_stack.length; ++i) {
+  8390→                title +=
+  8391→                    this._graph_stack[i]._subgraph_node.getTitle() + " >> ";
+  8392→            }
+  8393→            ctx.fillText(
+  8394→                title + subgraph_node.getTitle(),
+  8395→                canvas.width * 0.5,
+  8396→                40
+  8397→            );
+  8398→            ctx.restore();
+  8399→        }
+  8400→
+  8401→        var bg_already_painted = false;
+  8402→        if (this.onRenderBackground) {
+  8403→            bg_already_painted = this.onRenderBackground(canvas, ctx);
+  8404→        }
+  8405→
+  8406→        //reset in case of error
+  8407→        if ( !this.viewport )
+  8408→                {
+  8409→                ctx.restore();
+  8410→                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  8411→                }
+  8412→        this.visible_links.length = 0;
+  8413→
+  8414→        if (this.graph) {
+  8415→            //apply transformations
+  8416→            ctx.save();
+  8417→            this.ds.toCanvasContext(ctx);
+  8418→
+  8419→            //render BG
+  8420→            if ( this.ds.scale < 1.5 && !bg_already_painted && this.clear_background_color )
+  8421→            {
+  8422→                ctx.fillStyle = this.clear_background_color;
+  8423→                ctx.fillRect(
+  8424→                    this.visible_area[0],
+  8425→                    this.visible_area[1],
+  8426→                    this.visible_area[2],
+  8427→                    this.visible_area[3]
+  8428→                );
+  8429→            }
+  8430→
+  8431→            if (
+  8432→                this.background_image &&
+  8433→                this.ds.scale > 0.5 &&
+  8434→                !bg_already_painted
+  8435→            ) {
+  8436→                if (this.zoom_modify_alpha) {
+  8437→                    ctx.globalAlpha =
+  8438→                        (1.0 - 0.5 / this.ds.scale) * this.editor_alpha;
+  8439→                } else {
+  8440→                    ctx.globalAlpha = this.editor_alpha;
+  8441→                }
+  8442→                ctx.imageSmoothingEnabled = ctx.imageSmoothingEnabled = false; // ctx.mozImageSmoothingEnabled = 
+  8443→                if (
+  8444→                    !this._bg_img ||
+  8445→                    this._bg_img.name != this.background_image
+  8446→                ) {
+  8447→                    this._bg_img = new Image();
+  8448→                    this._bg_img.name = this.background_image;
+  8449→                    this._bg_img.src = this.background_image;
+  8450→                    var that = this;
+  8451→                    this._bg_img.onload = function() {
+  8452→                        that.draw(true, true);
+  8453→                    };
+  8454→                }
+  8455→
+  8456→                var pattern = null;
+  8457→                if (this._pattern == null && this._bg_img.width > 0) {
+  8458→                    pattern = ctx.createPattern(this._bg_img, "repeat");
+  8459→                    this._pattern_img = this._bg_img;
+  8460→                    this._pattern = pattern;
+  8461→                } else {
+  8462→                    pattern = this._pattern;
+  8463→                }
+  8464→                if (pattern) {
+  8465→                    ctx.fillStyle = pattern;
+  8466→                    ctx.fillRect(
+  8467→                        this.visible_area[0],
+  8468→                        this.visible_area[1],
+  8469→                        this.visible_area[2],
+  8470→                        this.visible_area[3]
+  8471→                    );
+  8472→                    ctx.fillStyle = "transparent";
+  8473→                }
+  8474→
+  8475→                ctx.globalAlpha = 1.0;
+  8476→                ctx.imageSmoothingEnabled = ctx.imageSmoothingEnabled = true; //= ctx.mozImageSmoothingEnabled
+  8477→            }
+  8478→
+  8479→            //groups
+  8480→            if (this.graph._groups.length && !this.live_mode) {
+  8481→                this.drawGroups(canvas, ctx);
+  8482→            }
+  8483→
+  8484→            if (this.onDrawBackground) {
+  8485→                this.onDrawBackground(ctx, this.visible_area);
+  8486→            }
+  8487→            if (this.onBackgroundRender) {
+  8488→                //LEGACY
+  8489→                console.error(
+  8490→                    "WARNING! onBackgroundRender deprecated, now is named onDrawBackground "
+  8491→                );
+  8492→                this.onBackgroundRender = null;
+  8493→            }
+  8494→
+  8495→            //DEBUG: show clipping area
+  8496→            //ctx.fillStyle = "red";
+  8497→            //ctx.fillRect( this.visible_area[0] + 10, this.visible_area[1] + 10, this.visible_area[2] - 20, this.visible_area[3] - 20);
+  8498→
+  8499→            //bg
+  8500→            if (this.render_canvas_border) {
+  8501→                ctx.strokeStyle = "#235";
+  8502→                ctx.strokeRect(0, 0, canvas.width, canvas.height);
+  8503→            }
+  8504→
+  8505→            if (this.render_connections_shadows) {
+  8506→                ctx.shadowColor = "#000";
+  8507→                ctx.shadowOffsetX = 0;
+  8508→                ctx.shadowOffsetY = 0;
+  8509→                ctx.shadowBlur = 6;
+  8510→            } else {
+  8511→                ctx.shadowColor = "rgba(0,0,0,0)";
+  8512→            }
+  8513→
+  8514→            //draw connections
+  8515→            if (!this.live_mode) {
+  8516→                this.drawConnections(ctx);
+  8517→            }
+  8518→
+  8519→            ctx.shadowColor = "rgba(0,0,0,0)";
+  8520→
+  8521→            //restore state
+  8522→            ctx.restore();
+  8523→        }
+  8524→
+  8525→        if (ctx.finish) {
+  8526→            ctx.finish();
+  8527→        }
+  8528→
+  8529→        this.dirty_bgcanvas = false;
+  8530→        this.dirty_canvas = true; //to force to repaint the front canvas with the bgcanvas
+  8531→    };
+  8532→
+  8533→    var temp_vec2 = new Float32Array(2);
+  8534→
+  8535→    /**
+  8536→     * draws the given node inside the canvas
+  8537→     * @method drawNode
+  8538→     **/
+  8539→    LGraphCanvas.prototype.drawNode = function(node, ctx) {
+  8540→        var glow = false;
+  8541→        this.current_node = node;
+  8542→
+  8543→        var color = node.color || node.constructor.color || LiteGraph.NODE_DEFAULT_COLOR;
+  8544→        var bgcolor = node.bgcolor || node.constructor.bgcolor || LiteGraph.NODE_DEFAULT_BGCOLOR;
+  8545→
+  8546→        //shadow and glow
+  8547→        if (node.mouseOver) {
+  8548→            glow = true;
+  8549→        }
+  8550→
+  8551→        var low_quality = this.ds.scale < 0.6; //zoomed out
+  8552→
+  8553→        //only render if it forces it to do it
+  8554→        if (this.live_mode) {
+  8555→            if (!node.flags.collapsed) {
+  8556→                ctx.shadowColor = "transparent";
+  8557→                if (node.onDrawForeground) {
+  8558→                    node.onDrawForeground(ctx, this, this.canvas);
+  8559→                }
+  8560→            }
+  8561→            return;
+  8562→        }
+  8563→
+  8564→        var editor_alpha = this.editor_alpha;
+  8565→        ctx.globalAlpha = editor_alpha;
+  8566→
+  8567→        if (this.render_shadows && !low_quality) {
+  8568→            ctx.shadowColor = LiteGraph.DEFAULT_SHADOW_COLOR;
+  8569→            ctx.shadowOffsetX = 2 * this.ds.scale;
+  8570→            ctx.shadowOffsetY = 2 * this.ds.scale;
+  8571→            ctx.shadowBlur = 3 * this.ds.scale;
+  8572→        } else {
+  8573→            ctx.shadowColor = "transparent";
+  8574→        }
+  8575→
+  8576→        //custom draw collapsed method (draw after shadows because they are affected)
+  8577→        if (
+  8578→            node.flags.collapsed &&
+  8579→            node.onDrawCollapsed &&
+  8580→            node.onDrawCollapsed(ctx, this) == true
+  8581→        ) {
+  8582→            return;
+  8583→        }
+  8584→
+  8585→        //clip if required (mask)
+  8586→        var shape = node._shape || LiteGraph.BOX_SHAPE;
+  8587→        var size = temp_vec2;
+  8588→        temp_vec2.set(node.size);
+  8589→        var horizontal = node.horizontal; // || node.flags.horizontal;
+  8590→
+  8591→        if (node.flags.collapsed) {
+  8592→            ctx.font = this.inner_text_font;
+  8593→            var title = node.getTitle ? node.getTitle() : node.title;
+  8594→            if (title != null) {
+  8595→                node._collapsed_width = Math.min(
+  8596→                    node.size[0],
+  8597→                    ctx.measureText(title).width +
+  8598→                        LiteGraph.NODE_TITLE_HEIGHT * 2
+  8599→                ); //LiteGraph.NODE_COLLAPSED_WIDTH;
+  8600→                size[0] = node._collapsed_width;
+  8601→                size[1] = 0;
+  8602→            }
+  8603→        }
+  8604→
+  8605→        if (node.clip_area) {
+  8606→            //Start clipping
+  8607→            ctx.save();
+  8608→            ctx.beginPath();
+  8609→            if (shape == LiteGraph.BOX_SHAPE) {
+  8610→                ctx.rect(0, 0, size[0], size[1]);
+  8611→            } else if (shape == LiteGraph.ROUND_SHAPE) {
+  8612→                ctx.roundRect(0, 0, size[0], size[1], [10]);
+  8613→            } else if (shape == LiteGraph.CIRCLE_SHAPE) {
+  8614→                ctx.arc(
+  8615→                    size[0] * 0.5,
+  8616→                    size[1] * 0.5,
+  8617→                    size[0] * 0.5,
+  8618→                    0,
+  8619→                    Math.PI * 2
+  8620→                );
+  8621→            }
+  8622→            ctx.clip();
+  8623→        }
+  8624→
+  8625→        //draw shape
+  8626→        if (node.has_errors) {
+  8627→            bgcolor = "red";
+  8628→        }
+  8629→        this.drawNodeShape(
+  8630→            node,
+  8631→            ctx,
+  8632→            size,
+  8633→            color,
+  8634→            bgcolor,
+  8635→            node.is_selected,
+  8636→            node.mouseOver
+  8637→        );
+  8638→        ctx.shadowColor = "transparent";
+  8639→
+  8640→        //draw foreground
+  8641→        if (node.onDrawForeground) {
+  8642→            node.onDrawForeground(ctx, this, this.canvas);
+  8643→        }
+  8644→
+  8645→        //connection slots
+  8646→        ctx.textAlign = horizontal ? "center" : "left";
+  8647→        ctx.font = this.inner_text_font;
+  8648→
+  8649→        var render_text = !low_quality;
+  8650→
+  8651→        var out_slot = this.connecting_output;
+  8652→        var in_slot = this.connecting_input;
+  8653→        ctx.lineWidth = 1;
+  8654→
+  8655→        var max_y = 0;
+  8656→        var slot_pos = new Float32Array(2); //to reuse
+  8657→
+  8658→        //render inputs and outputs
+  8659→        if (!node.flags.collapsed) {
+  8660→            //input connection slots
+  8661→            if (node.inputs) {
+  8662→                for (var i = 0; i < node.inputs.length; i++) {
+  8663→                    var slot = node.inputs[i];
+  8664→                    
+  8665→                    var slot_type = slot.type;
+  8666→                    var slot_shape = slot.shape;
+  8667→                    
+  8668→                    ctx.globalAlpha = editor_alpha;
+  8669→                    //change opacity of incompatible slots when dragging a connection
+  8670→                    if ( this.connecting_output && !LiteGraph.isValidConnection( slot.type , out_slot.type) ) {
+  8671→                        ctx.globalAlpha = 0.4 * editor_alpha;
+  8672→                    }
+  8673→
+  8674→                    ctx.fillStyle =
+  8675→                        slot.link != null
+  8676→                            ? slot.color_on ||
+  8677→                              this.default_connection_color_byType[slot_type] ||
+  8678→                              this.default_connection_color.input_on
+  8679→                            : slot.color_off ||
+  8680→                              this.default_connection_color_byTypeOff[slot_type] ||
+  8681→                              this.default_connection_color_byType[slot_type] ||
+  8682→                              this.default_connection_color.input_off;
+  8683→
+  8684→                    var pos = node.getConnectionPos(true, i, slot_pos);
+  8685→                    pos[0] -= node.pos[0];
+  8686→                    pos[1] -= node.pos[1];
+  8687→                    if (max_y < pos[1] + LiteGraph.NODE_SLOT_HEIGHT * 0.5) {
+  8688→                        max_y = pos[1] + LiteGraph.NODE_SLOT_HEIGHT * 0.5;
+  8689→                    }
+  8690→
+  8691→                    ctx.beginPath();
+  8692→
+  8693→                                        if (slot_type == "array"){
+  8694→                        slot_shape = LiteGraph.GRID_SHAPE; // place in addInput? addOutput instead?
+  8695→                    }
+  8696→                    
+  8697→                    var doStroke = true;
+  8698→                    
+  8699→                    if (
+  8700→                        slot.type === LiteGraph.EVENT ||
+  8701→                        slot.shape === LiteGraph.BOX_SHAPE
+  8702→                    ) {
+  8703→                        if (horizontal) {
+  8704→                            ctx.rect(
+  8705→                                pos[0] - 5 + 0.5,
+  8706→                                pos[1] - 8 + 0.5,
+  8707→                                10,
+  8708→                                14
+  8709→                            );
+  8710→                        } else {
+  8711→                            ctx.rect(
+  8712→                                pos[0] - 6 + 0.5,
+  8713→                                pos[1] - 5 + 0.5,
+  8714→                                14,
+  8715→                                10
+  8716→                            );
+  8717→                        }
+  8718→                    } else if (slot_shape === LiteGraph.ARROW_SHAPE) {
+  8719→                        ctx.moveTo(pos[0] + 8, pos[1] + 0.5);
+  8720→                        ctx.lineTo(pos[0] - 4, pos[1] + 6 + 0.5);
+  8721→                        ctx.lineTo(pos[0] - 4, pos[1] - 6 + 0.5);
+  8722→                        ctx.closePath();
+  8723→                    } else if (slot_shape === LiteGraph.GRID_SHAPE) {
+  8724→                        ctx.rect(pos[0] - 4, pos[1] - 4, 2, 2);
+  8725→                        ctx.rect(pos[0] - 1, pos[1] - 4, 2, 2);
+  8726→                        ctx.rect(pos[0] + 2, pos[1] - 4, 2, 2);
+  8727→                        ctx.rect(pos[0] - 4, pos[1] - 1, 2, 2);
+  8728→                        ctx.rect(pos[0] - 1, pos[1] - 1, 2, 2);
+  8729→                        ctx.rect(pos[0] + 2, pos[1] - 1, 2, 2);
+  8730→                        ctx.rect(pos[0] - 4, pos[1] + 2, 2, 2);
+  8731→                        ctx.rect(pos[0] - 1, pos[1] + 2, 2, 2);
+  8732→                        ctx.rect(pos[0] + 2, pos[1] + 2, 2, 2);
+  8733→                        doStroke = false;
+  8734→                    } else {
+  8735→                                                if(low_quality)
+  8736→                                ctx.rect(pos[0] - 4, pos[1] - 4, 8, 8 ); //faster
+  8737→                                                else
+  8738→                                ctx.arc(pos[0], pos[1], 4, 0, Math.PI * 2);
+  8739→                    }
+  8740→                    ctx.fill();
+  8741→
+  8742→                    //render name
+  8743→                    if (render_text) {
+  8744→                        var text = slot.label != null ? slot.label : slot.name;
+  8745→                        if (text) {
+  8746→                            ctx.fillStyle = LiteGraph.NODE_TEXT_COLOR;
+  8747→                            if (horizontal || slot.dir == LiteGraph.UP) {
+  8748→                                ctx.fillText(text, pos[0], pos[1] - 10);
+  8749→                            } else {
+  8750→                                ctx.fillText(text, pos[0] + 10, pos[1] + 5);
+  8751→                            }
+  8752→                        }
+  8753→                    }
+  8754→                }
+  8755→            }
+  8756→
+  8757→            //output connection slots
+  8758→
+  8759→            ctx.textAlign = horizontal ? "center" : "right";
+  8760→            ctx.strokeStyle = "black";
+  8761→            if (node.outputs) {
+  8762→                for (var i = 0; i < node.outputs.length; i++) {
+  8763→                    var slot = node.outputs[i];
+  8764→                    
+  8765→                    var slot_type = slot.type;
+  8766→                    var slot_shape = slot.shape;
+  8767→                    
+  8768→                    //change opacity of incompatible slots when dragging a connection
+  8769→                    if (this.connecting_input && !LiteGraph.isValidConnection( slot_type , in_slot.type) ) {
+  8770→                        ctx.globalAlpha = 0.4 * editor_alpha;
+  8771→                    }
+  8772→                    
+  8773→                    var pos = node.getConnectionPos(false, i, slot_pos);
+  8774→                    pos[0] -= node.pos[0];
+  8775→                    pos[1] -= node.pos[1];
+  8776→                    if (max_y < pos[1] + LiteGraph.NODE_SLOT_HEIGHT * 0.5) {
+  8777→                        max_y = pos[1] + LiteGraph.NODE_SLOT_HEIGHT * 0.5;
+  8778→                    }
+  8779→
+  8780→                    ctx.fillStyle =
+  8781→                        slot.links && slot.links.length
+  8782→                            ? slot.color_on ||
+  8783→                              this.default_connection_color_byType[slot_type] ||
+  8784→                              this.default_connection_color.output_on
+  8785→                            : slot.color_off ||
+  8786→                              this.default_connection_color_byTypeOff[slot_type] ||
+  8787→                              this.default_connection_color_byType[slot_type] ||
+  8788→                              this.default_connection_color.output_off;
+  8789→                    ctx.beginPath();
+  8790→                    //ctx.rect( node.size[0] - 14,i*14,10,10);
+  8791→
+  8792→                                        if (slot_type == "array"){
+  8793→                        slot_shape = LiteGraph.GRID_SHAPE;
+  8794→                    }
+  8795→                    
+  8796→                    var doStroke = true;
+  8797→                    
+  8798→                    if (
+  8799→                        slot_type === LiteGraph.EVENT ||
+  8800→                        slot_shape === LiteGraph.BOX_SHAPE
+  8801→                    ) {
+  8802→                        if (horizontal) {
+  8803→                            ctx.rect(
+  8804→                                pos[0] - 5 + 0.5,
+  8805→                                pos[1] - 8 + 0.5,
+  8806→                                10,
+  8807→                                14
+  8808→                            );
+  8809→                        } else {
+  8810→                            ctx.rect(
+  8811→                                pos[0] - 6 + 0.5,
+  8812→                                pos[1] - 5 + 0.5,
+  8813→                                14,
+  8814→                                10
+  8815→                            );
+  8816→                        }
+  8817→                    } else if (slot_shape === LiteGraph.ARROW_SHAPE) {
+  8818→                        ctx.moveTo(pos[0] + 8, pos[1] + 0.5);
+  8819→                        ctx.lineTo(pos[0] - 4, pos[1] + 6 + 0.5);
+  8820→                        ctx.lineTo(pos[0] - 4, pos[1] - 6 + 0.5);
+  8821→                        ctx.closePath();
+  8822→                    }  else if (slot_shape === LiteGraph.GRID_SHAPE) {
+  8823→                        ctx.rect(pos[0] - 4, pos[1] - 4, 2, 2);
+  8824→                        ctx.rect(pos[0] - 1, pos[1] - 4, 2, 2);
+  8825→                        ctx.rect(pos[0] + 2, pos[1] - 4, 2, 2);
+  8826→                        ctx.rect(pos[0] - 4, pos[1] - 1, 2, 2);
+  8827→                        ctx.rect(pos[0] - 1, pos[1] - 1, 2, 2);
+  8828→                        ctx.rect(pos[0] + 2, pos[1] - 1, 2, 2);
+  8829→                        ctx.rect(pos[0] - 4, pos[1] + 2, 2, 2);
+  8830→                        ctx.rect(pos[0] - 1, pos[1] + 2, 2, 2);
+  8831→                        ctx.rect(pos[0] + 2, pos[1] + 2, 2, 2);
+  8832→                        doStroke = false;
+  8833→                    } else {
+  8834→                                                if(low_quality)
+  8835→                                ctx.rect(pos[0] - 4, pos[1] - 4, 8, 8 );
+  8836→                                                else
+  8837→                                ctx.arc(pos[0], pos[1], 4, 0, Math.PI * 2);
+  8838→                    }
+  8839→
+  8840→                    //trigger
+  8841→                    //if(slot.node_id != null && slot.slot == -1)
+  8842→                    //  ctx.fillStyle = "#F85";
+  8843→
+  8844→                    //if(slot.links != null && slot.links.length)
+  8845→                    ctx.fill();
+  8846→                                        if(!low_quality && doStroke)
+  8847→                            ctx.stroke();
+  8848→
+  8849→                    //render output name
+  8850→                    if (render_text) {
+  8851→                        var text = slot.label != null ? slot.label : slot.name;
+  8852→                        if (text) {
+  8853→                            ctx.fillStyle = LiteGraph.NODE_TEXT_COLOR;
+  8854→                            if (horizontal || slot.dir == LiteGraph.DOWN) {
+  8855→                                ctx.fillText(text, pos[0], pos[1] - 8);
+  8856→                            } else {
+  8857→                                ctx.fillText(text, pos[0] - 10, pos[1] + 5);
+  8858→                            }
+  8859→                        }
+  8860→                    }
+  8861→                }
+  8862→            }
+  8863→
+  8864→            ctx.textAlign = "left";
+  8865→            ctx.globalAlpha = 1;
+  8866→
+  8867→            if (node.widgets) {
+  8868→                                var widgets_y = max_y;
+  8869→                if (horizontal || node.widgets_up) {
+  8870→                    widgets_y = 2;
+  8871→                }
+  8872→                                if( node.widgets_start_y != null )
+  8873→                    widgets_y = node.widgets_start_y;
+  8874→                this.drawNodeWidgets(
+  8875→                    node,
+  8876→                    widgets_y,
+  8877→                    ctx,
+  8878→                    this.node_widget && this.node_widget[0] == node
+  8879→                        ? this.node_widget[1]
+  8880→                        : null
+  8881→                );
+  8882→            }
+  8883→        } else if (this.render_collapsed_slots) {
+  8884→            //if collapsed
+  8885→            var input_slot = null;
+  8886→            var output_slot = null;
+  8887→
+  8888→            //get first connected slot to render
+  8889→            if (node.inputs) {
+  8890→                for (var i = 0; i < node.inputs.length; i++) {
+  8891→                    var slot = node.inputs[i];
+  8892→                    if (slot.link == null) {
+  8893→                        continue;
+  8894→                    }
+  8895→                    input_slot = slot;
+  8896→                    break;
+  8897→                }
+  8898→            }
+  8899→            if (node.outputs) {
+  8900→                for (var i = 0; i < node.outputs.length; i++) {
+  8901→                    var slot = node.outputs[i];
+  8902→                    if (!slot.links || !slot.links.length) {
+  8903→                        continue;
+  8904→                    }
+  8905→                    output_slot = slot;
+  8906→                }
+  8907→            }
+  8908→
+  8909→            if (input_slot) {
+  8910→                var x = 0;
+  8911→                var y = LiteGraph.NODE_TITLE_HEIGHT * -0.5; //center
+  8912→                if (horizontal) {
+  8913→                    x = node._collapsed_width * 0.5;
+  8914→                    y = -LiteGraph.NODE_TITLE_HEIGHT;
+  8915→                }
+  8916→                ctx.fillStyle = "#686";
+  8917→                ctx.beginPath();
+  8918→                if (
+  8919→                    slot.type === LiteGraph.EVENT ||
+  8920→                    slot.shape === LiteGraph.BOX_SHAPE
+  8921→                ) {
+  8922→                    ctx.rect(x - 7 + 0.5, y - 4, 14, 8);
+  8923→                } else if (slot.shape === LiteGraph.ARROW_SHAPE) {
+  8924→                    ctx.moveTo(x + 8, y);
+  8925→                    ctx.lineTo(x + -4, y - 4);
+  8926→                    ctx.lineTo(x + -4, y + 4);
+  8927→                    ctx.closePath();
+  8928→                } else {
+  8929→                    ctx.arc(x, y, 4, 0, Math.PI * 2);
+  8930→                }
+  8931→                ctx.fill();
+  8932→            }
+  8933→
+  8934→            if (output_slot) {
+  8935→                var x = node._collapsed_width;
+  8936→                var y = LiteGraph.NODE_TITLE_HEIGHT * -0.5; //center
+  8937→                if (horizontal) {
+  8938→                    x = node._collapsed_width * 0.5;
+  8939→                    y = 0;
+  8940→                }
+  8941→                ctx.fillStyle = "#686";
+  8942→                ctx.strokeStyle = "black";
+  8943→                ctx.beginPath();
+  8944→                if (
+  8945→                    slot.type === LiteGraph.EVENT ||
+  8946→                    slot.shape === LiteGraph.BOX_SHAPE
+  8947→                ) {
+  8948→                    ctx.rect(x - 7 + 0.5, y - 4, 14, 8);
+  8949→                } else if (slot.shape === LiteGraph.ARROW_SHAPE) {
+  8950→                    ctx.moveTo(x + 6, y);
+  8951→                    ctx.lineTo(x - 6, y - 4);
+  8952→                    ctx.lineTo(x - 6, y + 4);
+  8953→                    ctx.closePath();
+  8954→                } else {
+  8955→                    ctx.arc(x, y, 4, 0, Math.PI * 2);
+  8956→                }
+  8957→                ctx.fill();
+  8958→                //ctx.stroke();
+  8959→            }
+  8960→        }
+  8961→
+  8962→        if (node.clip_area) {
+  8963→            ctx.restore();
+  8964→        }
+  8965→
+  8966→        ctx.globalAlpha = 1.0;
+  8967→    };
+  8968→
+  8969→        //used by this.over_link_center
+  8970→        LGraphCanvas.prototype.drawLinkTooltip = function( ctx, link )
+  8971→        {
+  8972→                var pos = link._pos;
+  8973→                ctx.fillStyle = "black";
+  8974→                ctx.beginPath();
+  8975→                ctx.arc( pos[0], pos[1], 3, 0, Math.PI * 2 );
+  8976→                ctx.fill();
+  8977→
+  8978→                if(link.data == null)
+  8979→                        return;
+  8980→
+  8981→                if(this.onDrawLinkTooltip)
+  8982→                        if( this.onDrawLinkTooltip(ctx,link,this) == true )
+  8983→                                return;
+  8984→
+  8985→                var data = link.data;
+  8986→                var text = null;
+  8987→
+  8988→                if( data.constructor === Number )
+  8989→                        text = data.toFixed(2);
+  8990→                else if( data.constructor === String )
+  8991→                        text = "\"" + data + "\"";
+  8992→                else if( data.constructor === Boolean )
+  8993→                        text = String(data);
+  8994→                else if (data.toToolTip)
+  8995→                        text = data.toToolTip();
+  8996→                else
+  8997→                        text = "[" + data.constructor.name + "]";
+  8998→
+  8999→                if(text == null)
+  9000→                        return;
+  9001→                text = text.substr(0,30); //avoid weird
+  9002→
+  9003→                ctx.font = "14px Courier New";
+  9004→                var info = ctx.measureText(text);
+  9005→                var w = info.width + 20;
+  9006→                var h = 24;
+  9007→                ctx.shadowColor = "black";
+  9008→                ctx.shadowOffsetX = 2;
+  9009→                ctx.shadowOffsetY = 2;
+  9010→                ctx.shadowBlur = 3;
+  9011→                ctx.fillStyle = "#454";
+  9012→                ctx.beginPath();
+  9013→                ctx.roundRect( pos[0] - w*0.5, pos[1] - 15 - h, w, h, [3]);
+  9014→                ctx.moveTo( pos[0] - 10, pos[1] - 15 );
+  9015→                ctx.lineTo( pos[0] + 10, pos[1] - 15 );
+  9016→                ctx.lineTo( pos[0], pos[1] - 5 );
+  9017→                ctx.fill();
+  9018→        ctx.shadowColor = "transparent";
+  9019→                ctx.textAlign = "center";
+  9020→                ctx.fillStyle = "#CEC";
+  9021→                ctx.fillText(text, pos[0], pos[1] - 15 - h * 0.3);
+  9022→        }
+  9023→
+  9024→    /**
+  9025→     * draws the shape of the given node in the canvas
+  9026→     * @method drawNodeShape
+  9027→     **/
+  9028→    var tmp_area = new Float32Array(4);
+  9029→
+  9030→    LGraphCanvas.prototype.drawNodeShape = function(
+  9031→        node,
+  9032→        ctx,
+  9033→        size,
+  9034→        fgcolor,
+  9035→        bgcolor,
+  9036→        selected,
+  9037→        mouse_over
+  9038→    ) {
+  9039→        //bg rect
+  9040→        ctx.strokeStyle = fgcolor;
+  9041→        ctx.fillStyle = bgcolor;
+  9042→
+  9043→        var title_height = LiteGraph.NODE_TITLE_HEIGHT;
+  9044→        var low_quality = this.ds.scale < 0.5;
+  9045→
+  9046→        //render node area depending on shape
+  9047→        var shape =
+  9048→            node._shape || node.constructor.shape || LiteGraph.ROUND_SHAPE;
+  9049→
+  9050→        var title_mode = node.constructor.title_mode;
+
+[showing lines 8351-9050 of 14425; use offset=9051 with limit to continue reading]

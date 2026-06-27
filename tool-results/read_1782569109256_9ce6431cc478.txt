@@ -1,0 +1,832 @@
+     1→    14→    var LiteGraph = (global.LiteGraph = {
+     2→    15→        VERSION: 0.4,
+     3→    16→
+     4→    17→        CANVAS_GRID_SIZE: 10,
+     5→    18→
+     6→    19→        NODE_TITLE_HEIGHT: 30,
+     7→    20→        NODE_TITLE_TEXT_Y: 20,
+     8→    21→        NODE_SLOT_HEIGHT: 20,
+     9→    22→        NODE_WIDGET_HEIGHT: 20,
+    10→    23→        NODE_WIDTH: 140,
+    11→    24→        NODE_MIN_WIDTH: 50,
+    12→    25→        NODE_COLLAPSED_RADIUS: 10,
+    13→    26→        NODE_COLLAPSED_WIDTH: 80,
+    14→    27→        NODE_TITLE_COLOR: "#999",
+    15→    28→        NODE_SELECTED_TITLE_COLOR: "#FFF",
+    16→    29→        NODE_TEXT_SIZE: 14,
+    17→    30→        NODE_TEXT_COLOR: "#AAA",
+    18→    31→        NODE_SUBTEXT_SIZE: 12,
+    19→    32→        NODE_DEFAULT_COLOR: "#333",
+    20→    33→        NODE_DEFAULT_BGCOLOR: "#353535",
+    21→    34→        NODE_DEFAULT_BOXCOLOR: "#666",
+    22→    35→        NODE_DEFAULT_SHAPE: "box",
+    23→    36→        NODE_BOX_OUTLINE_COLOR: "#FFF",
+    24→    37→        DEFAULT_SHADOW_COLOR: "rgba(0,0,0,0.5)",
+    25→    38→        DEFAULT_GROUP_FONT: 24,
+    26→    39→
+    27→    40→        WIDGET_BGCOLOR: "#222",
+    28→    41→        WIDGET_OUTLINE_COLOR: "#666",
+    29→    42→        WIDGET_TEXT_COLOR: "#DDD",
+    30→    43→        WIDGET_SECONDARY_TEXT_COLOR: "#999",
+    31→    44→
+    32→    45→        LINK_COLOR: "#9A9",
+    33→    46→        EVENT_LINK_COLOR: "#A86",
+    34→    47→        CONNECTING_LINK_COLOR: "#AFA",
+    35→    48→
+    36→    49→        MAX_NUMBER_OF_NODES: 1000, //avoid infinite loops
+    37→    50→        DEFAULT_POSITION: [100, 100], //default node position
+    38→    51→        VALID_SHAPES: ["default", "box", "round", "card"], //,"circle"
+    39→    52→
+    40→    53→        //shapes are used for nodes but also for slots
+    41→    54→        BOX_SHAPE: 1,
+    42→    55→        ROUND_SHAPE: 2,
+    43→    56→        CIRCLE_SHAPE: 3,
+    44→    57→        CARD_SHAPE: 4,
+    45→    58→        ARROW_SHAPE: 5,
+    46→    59→        GRID_SHAPE: 6, // intended for slot arrays
+    47→    60→
+    48→    61→        //enums
+    49→    62→        INPUT: 1,
+    50→    63→        OUTPUT: 2,
+    51→    64→
+    52→    65→        EVENT: -1, //for outputs
+    53→    66→        ACTION: -1, //for inputs
+    54→    67→
+    55→    68→        NODE_MODES: ["Always", "On Event", "Never", "On Trigger"], // helper, will add "On Request" and more in the future
+    56→    69→        NODE_MODES_COLORS:["#666","#422","#333","#224","#626"], // use with node_box_coloured_by_mode
+    57→    70→        ALWAYS: 0,
+    58→    71→        ON_EVENT: 1,
+    59→    72→        NEVER: 2,
+    60→    73→        ON_TRIGGER: 3,
+    61→    74→
+    62→    75→        UP: 1,
+    63→    76→        DOWN: 2,
+    64→    77→        LEFT: 3,
+    65→    78→        RIGHT: 4,
+    66→    79→        CENTER: 5,
+    67→    80→
+    68→    81→        LINK_RENDER_MODES: ["Straight", "Linear", "Spline"], // helper
+    69→    82→        STRAIGHT_LINK: 0,
+    70→    83→        LINEAR_LINK: 1,
+    71→    84→        SPLINE_LINK: 2,
+    72→    85→
+    73→    86→        NORMAL_TITLE: 0,
+    74→    87→        NO_TITLE: 1,
+    75→    88→        TRANSPARENT_TITLE: 2,
+    76→    89→        AUTOHIDE_TITLE: 3,
+    77→    90→        VERTICAL_LAYOUT: "vertical", // arrange nodes vertically
+    78→    91→
+    79→    92→        proxy: null, //used to redirect calls
+    80→    93→        node_images_path: "",
+    81→    94→
+    82→    95→        debug: false,
+    83→    96→        catch_exceptions: true,
+    84→    97→        throw_errors: true,
+    85→    98→        allow_scripts: false, //if set to true some nodes like Formula would be allowed to evaluate code that comes from unsafe sources (like node configuration), which could lead to exploits
+    86→    99→        use_deferred_actions: true, //executes actions during the graph execution flow
+    87→   100→        registered_node_types: {}, //nodetypes by string
+    88→   101→        node_types_by_file_extension: {}, //used for dropping files in the canvas
+    89→   102→        Nodes: {}, //node types by classname
+    90→   103→                Globals: {}, //used to store vars between graphs
+    91→   104→
+    92→   105→        searchbox_extras: {}, //used to add extra features to the search box
+    93→   106→        auto_sort_node_types: false, // [true!] If set to true, will automatically sort node types / categories in the context menus
+    94→   107→                
+    95→   108→                node_box_coloured_when_on: false, // [true!] this make the nodes box (top left circle) coloured when triggered (execute/action), visual feedback
+    96→   109→        node_box_coloured_by_mode: false, // [true!] nodebox based on node mode, visual feedback
+    97→   110→        
+    98→   111→        dialog_close_on_mouse_leave: true, // [false on mobile] better true if not touch device, TODO add an helper/listener to close if false
+    99→   112→        dialog_close_on_mouse_leave_delay: 500,
+   100→   113→        
+   101→   114→        shift_click_do_break_link_from: false, // [false!] prefer false if results too easy to break links - implement with ALT or TODO custom keys
+   102→   115→        click_do_break_link_to: false, // [false!]prefer false, way too easy to break links
+   103→   116→        
+   104→   117→        search_hide_on_mouse_leave: true, // [false on mobile] better true if not touch device, TODO add an helper/listener to close if false
+   105→   118→        search_filter_enabled: false, // [true!] enable filtering slots type in the search widget, !requires auto_load_slot_types or manual set registered_slot_[in/out]_types and slot_types_[in/out]
+   106→   119→        search_show_all_on_open: true, // [true!] opens the results list when opening the search widget
+   107→   120→        
+   108→   121→        auto_load_slot_types: false, // [if want false, use true, run, get vars values to be statically set, than disable] nodes types and nodeclass association with node types need to be calculated, if dont want this, calculate once and set registered_slot_[in/out]_types and slot_types_[in/out]
+   109→   122→        
+   110→   123→                // set these values if not using auto_load_slot_types
+   111→   124→        registered_slot_in_types: {}, // slot types for nodeclass
+   112→   125→        registered_slot_out_types: {}, // slot types for nodeclass
+   113→   126→        slot_types_in: [], // slot types IN
+   114→   127→        slot_types_out: [], // slot types OUT
+   115→   128→        slot_types_default_in: [], // specify for each IN slot type a(/many) default node(s), use single string, array, or object (with node, title, parameters, ..) like for search
+   116→   129→                slot_types_default_out: [], // specify for each OUT slot type a(/many) default node(s), use single string, array, or object (with node, title, parameters, ..) like for search
+   117→   130→                
+   118→   131→                alt_drag_do_clone_nodes: false, // [true!] very handy, ALT click to clone and drag the new node
+   119→   132→
+   120→   133→                do_add_triggers_slots: false, // [true!] will create and connect event slots when using action/events connections, !WILL CHANGE node mode when using onTrigger (enable mode colors), onExecuted does not need this
+   121→   134→                
+   122→   135→                allow_multi_output_for_events: true, // [false!] being events, it is strongly reccomended to use them sequentially, one by one
+   123→   136→
+   124→   137→                middle_click_slot_add_default_node: false, //[true!] allows to create and connect a ndoe clicking with the third button (wheel)
+   125→   138→                
+   126→   139→                release_link_on_empty_shows_menu: false, //[true!] dragging a link to empty space will open a menu, add from list, search or defaults
+   127→   140→                
+   128→   141→        pointerevents_method: "mouse", // "mouse"|"pointer" use mouse for retrocompatibility issues? (none found @ now)
+   129→   142→        // TODO implement pointercancel, gotpointercapture, lostpointercapture, (pointerover, pointerout if necessary)
+   130→   143→
+   131→   144→        ctrl_shift_v_paste_connect_unselected_outputs: false, //[true!] allows ctrl + shift + v to paste nodes with the outputs of the unselected nodes connected with the inputs of the newly pasted nodes
+   132→   145→
+   133→   146→        // if true, all newly created nodes/links will use string UUIDs for their id fields instead of integers.
+   134→   147→        // use this if you must have node IDs that are unique across all graphs and subgraphs.
+   135→   148→        use_uuids: false,
+   136→   149→
+   137→   150→        /**
+   138→   151→         * Register a node class so it can be listed when the user wants to create a new one
+   139→   152→         * @method registerNodeType
+   140→   153→         * @param {String} type name of the node and path
+   141→   154→         * @param {Class} base_class class containing the structure of a node
+   142→   155→         */
+   143→   156→
+   144→   157→        registerNodeType: function(type, base_class) {
+   145→   158→            if (!base_class.prototype) {
+   146→   159→                throw "Cannot register a simple object, it must be a class with a prototype";
+   147→   160→            }
+   148→   161→            base_class.type = type;
+   149→   162→
+   150→   163→            if (LiteGraph.debug) {
+   151→   164→                console.log("Node registered: " + type);
+   152→   165→            }
+   153→   166→
+   154→   167→            const classname = base_class.name;
+   155→   168→
+   156→   169→            const pos = type.lastIndexOf("/");
+   157→   170→            base_class.category = type.substring(0, pos);
+   158→   171→
+   159→   172→            if (!base_class.title) {
+   160→   173→                base_class.title = classname;
+   161→   174→            }
+   162→   175→
+   163→   176→            //extend class
+   164→   177→            for (var i in LGraphNode.prototype) {
+   165→   178→                if (!base_class.prototype[i]) {
+   166→   179→                    base_class.prototype[i] = LGraphNode.prototype[i];
+   167→   180→                }
+   168→   181→            }
+   169→   182→
+   170→   183→            const prev = this.registered_node_types[type];
+   171→   184→            if(prev) {
+   172→   185→                console.log("replacing node type: " + type);
+   173→   186→            }
+   174→   187→            if( !Object.prototype.hasOwnProperty.call( base_class.prototype, "shape") ) {
+   175→   188→                Object.defineProperty(base_class.prototype, "shape", {
+   176→   189→                    set: function(v) {
+   177→   190→                        switch (v) {
+   178→   191→                            case "default":
+   179→   192→                                delete this._shape;
+   180→   193→                                break;
+   181→   194→                            case "box":
+   182→   195→                                this._shape = LiteGraph.BOX_SHAPE;
+   183→   196→                                break;
+   184→   197→                            case "round":
+   185→   198→                                this._shape = LiteGraph.ROUND_SHAPE;
+   186→   199→                                break;
+   187→   200→                            case "circle":
+   188→   201→                                this._shape = LiteGraph.CIRCLE_SHAPE;
+   189→   202→                                break;
+   190→   203→                            case "card":
+   191→   204→                                this._shape = LiteGraph.CARD_SHAPE;
+   192→   205→                                break;
+   193→   206→                            default:
+   194→   207→                                this._shape = v;
+   195→   208→                        }
+   196→   209→                    },
+   197→   210→                    get: function() {
+   198→   211→                        return this._shape;
+   199→   212→                    },
+   200→   213→                    enumerable: true,
+   201→   214→                    configurable: true
+   202→   215→                });
+   203→   216→                
+   204→   217→
+   205→   218→                //used to know which nodes to create when dragging files to the canvas
+   206→   219→                if (base_class.supported_extensions) {
+   207→   220→                    for (let i in base_class.supported_extensions) {
+   208→   221→                        const ext = base_class.supported_extensions[i];
+   209→   222→                        if(ext && ext.constructor === String) {
+   210→   223→                            this.node_types_by_file_extension[ ext.toLowerCase() ] = base_class;
+   211→   224→                        }
+   212→   225→                    }
+   213→   226→                }
+   214→   227→            }
+   215→   228→
+   216→   229→            this.registered_node_types[type] = base_class;
+   217→   230→            if (base_class.constructor.name) {
+   218→   231→                this.Nodes[classname] = base_class;
+   219→   232→            }
+   220→   233→            if (LiteGraph.onNodeTypeRegistered) {
+   221→   234→                LiteGraph.onNodeTypeRegistered(type, base_class);
+   222→   235→            }
+   223→   236→            if (prev && LiteGraph.onNodeTypeReplaced) {
+   224→   237→                LiteGraph.onNodeTypeReplaced(type, base_class, prev);
+   225→   238→            }
+   226→   239→
+   227→   240→            //warnings
+   228→   241→            if (base_class.prototype.onPropertyChange) {
+   229→   242→                console.warn(
+   230→   243→                    "LiteGraph node class " +
+   231→   244→                        type +
+   232→   245→                        " has onPropertyChange method, it must be called onPropertyChanged with d at the end"
+   233→   246→                );
+   234→   247→            }
+   235→   248→            
+   236→   249→            // TODO one would want to know input and ouput :: this would allow through registerNodeAndSlotType to get all the slots types
+   237→   250→            if (this.auto_load_slot_types) {
+   238→   251→                new base_class(base_class.title || "tmpnode");
+   239→   252→            }
+   240→   253→        },
+   241→   254→
+   242→   255→        /**
+   243→   256→         * removes a node type from the system
+   244→   257→         * @method unregisterNodeType
+   245→   258→         * @param {String|Object} type name of the node or the node constructor itself
+   246→   259→         */
+   247→   260→        unregisterNodeType: function(type) {
+   248→   261→            const base_class =
+   249→   262→                type.constructor === String
+   250→   263→                    ? this.registered_node_types[type]
+   251→   264→                    : type;
+   252→   265→            if (!base_class) {
+   253→   266→                throw "node type not found: " + type;
+   254→   267→            }
+   255→   268→            delete this.registered_node_types[base_class.type];
+   256→   269→            if (base_class.constructor.name) {
+   257→   270→                delete this.Nodes[base_class.constructor.name];
+   258→   271→            }
+   259→   272→        },
+   260→   273→
+   261→   274→        /**
+   262→   275→        * Save a slot type and his node
+   263→   276→        * @method registerSlotType
+   264→   277→        * @param {String|Object} type name of the node or the node constructor itself
+   265→   278→        * @param {String} slot_type name of the slot type (variable type), eg. string, number, array, boolean, ..
+   266→   279→        */
+   267→   280→        registerNodeAndSlotType: function(type, slot_type, out){
+   268→   281→            out = out || false;
+   269→   282→            const base_class =
+   270→   283→                type.constructor === String &&
+   271→   284→                this.registered_node_types[type] !== "anonymous"
+   272→   285→                    ? this.registered_node_types[type]
+   273→   286→                    : type;
+   274→   287→
+   275→   288→            const class_type = base_class.constructor.type;
+   276→   289→
+   277→   290→            let allTypes = [];
+   278→   291→            if (typeof slot_type === "string") {
+   279→   292→                allTypes = slot_type.split(",");
+   280→   293→            } else if (slot_type == this.EVENT || slot_type == this.ACTION) {
+   281→   294→                allTypes = ["_event_"];
+   282→   295→            } else {
+   283→   296→                allTypes = ["*"];
+   284→   297→            }
+   285→   298→
+   286→   299→            for (let i = 0; i < allTypes.length; ++i) {
+   287→   300→                let slotType = allTypes[i];
+   288→   301→                if (slotType === "") {
+   289→   302→                    slotType = "*";
+   290→   303→                }
+   291→   304→                const registerTo = out
+   292→   305→                    ? "registered_slot_out_types"
+   293→   306→                    : "registered_slot_in_types";
+   294→   307→                if (this[registerTo][slotType] === undefined) {
+   295→   308→                    this[registerTo][slotType] = { nodes: [] };
+   296→   309→                }
+   297→   310→                if (!this[registerTo][slotType].nodes.includes(class_type)) {
+   298→   311→                    this[registerTo][slotType].nodes.push(class_type);
+   299→   312→                }
+   300→   313→
+   301→   314→                // check if is a new type
+   302→   315→                if (!out) {
+   303→   316→                    if (!this.slot_types_in.includes(slotType.toLowerCase())) {
+   304→   317→                        this.slot_types_in.push(slotType.toLowerCase());
+   305→   318→                        this.slot_types_in.sort();
+   306→   319→                    }
+   307→   320→                } else {
+   308→   321→                    if (!this.slot_types_out.includes(slotType.toLowerCase())) {
+   309→   322→                        this.slot_types_out.push(slotType.toLowerCase());
+   310→   323→                        this.slot_types_out.sort();
+   311→   324→                    }
+   312→   325→                }
+   313→   326→            }
+   314→   327→        },
+   315→   328→        
+   316→   329→        /**
+   317→   330→         * Create a new nodetype by passing an object with some properties
+   318→   331→         * like onCreate, inputs:Array, outputs:Array, properties, onExecute
+   319→   332→         * @method buildNodeClassFromObject
+   320→   333→         * @param {String} name node name with namespace (p.e.: 'math/sum')
+   321→   334→         * @param {Object} object methods expected onCreate, inputs, outputs, properties, onExecute
+   322→   335→         */
+   323→   336→         buildNodeClassFromObject: function(
+   324→   337→            name,
+   325→   338→            object
+   326→   339→        ) {
+   327→   340→            var ctor_code = "";
+   328→   341→            if(object.inputs)
+   329→   342→            for(var i=0; i < object.inputs.length; ++i)
+   330→   343→            {
+   331→   344→                var _name = object.inputs[i][0];
+   332→   345→                var _type = object.inputs[i][1];
+   333→   346→                if(_type && _type.constructor === String)
+   334→   347→                    _type = '"'+_type+'"';
+   335→   348→                ctor_code += "this.addInput('"+_name+"',"+_type+");\n";
+   336→   349→            }
+   337→   350→            if(object.outputs)
+   338→   351→            for(var i=0; i < object.outputs.length; ++i)
+   339→   352→            {
+   340→   353→                var _name = object.outputs[i][0];
+   341→   354→                var _type = object.outputs[i][1];
+   342→   355→                if(_type && _type.constructor === String)
+   343→   356→                    _type = '"'+_type+'"';
+   344→   357→                ctor_code += "this.addOutput('"+_name+"',"+_type+");\n";
+   345→   358→            }
+   346→   359→            if(object.properties)
+   347→   360→            for(var i in object.properties)
+   348→   361→            {
+   349→   362→                var prop = object.properties[i];
+   350→   363→                if(prop && prop.constructor === String)
+   351→   364→                    prop = '"'+prop+'"';
+   352→   365→                ctor_code += "this.addProperty('"+i+"',"+prop+");\n";
+   353→   366→            }
+   354→   367→            ctor_code += "if(this.onCreate)this.onCreate()";
+   355→   368→            var classobj = Function(ctor_code);
+   356→   369→            for(var i in object)
+   357→   370→                if(i!="inputs" && i!="outputs" && i!="properties")
+   358→   371→                    classobj.prototype[i] = object[i];
+   359→   372→            classobj.title = object.title || name.split("/").pop();
+   360→   373→            classobj.desc = object.desc || "Generated from object";
+   361→   374→            this.registerNodeType(name, classobj);
+   362→   375→            return classobj;
+   363→   376→        },
+   364→   377→        
+   365→   378→        /**
+   366→   379→         * Create a new nodetype by passing a function, it wraps it with a proper class and generates inputs according to the parameters of the function.
+   367→   380→         * Useful to wrap simple methods that do not require properties, and that only process some input to generate an output.
+   368→   381→         * @method wrapFunctionAsNode
+   369→   382→         * @param {String} name node name with namespace (p.e.: 'math/sum')
+   370→   383→         * @param {Function} func
+   371→   384→         * @param {Array} param_types [optional] an array containing the type of every parameter, otherwise parameters will accept any type
+   372→   385→         * @param {String} return_type [optional] string with the return type, otherwise it will be generic
+   373→   386→         * @param {Object} properties [optional] properties to be configurable
+   374→   387→         */
+   375→   388→        wrapFunctionAsNode: function(
+   376→   389→            name,
+   377→   390→            func,
+   378→   391→            param_types,
+   379→   392→            return_type,
+   380→   393→            properties
+   381→   394→        ) {
+   382→   395→            var params = Array(func.length);
+   383→   396→            var code = "";
+   384→   397→            if(param_types !== null) //null means no inputs
+   385→   398→            {
+   386→   399→                var names = LiteGraph.getParameterNames(func);
+   387→   400→                for (var i = 0; i < names.length; ++i) {
+   388→   401→                    var type = 0;
+   389→   402→                    if(param_types)
+   390→   403→                    {
+   391→   404→                        //type = param_types[i] != null ? "'" + param_types[i] + "'" : "0";
+   392→   405→                        if( param_types[i] != null && param_types[i].constructor === String )
+   393→   406→                            type = "'" + param_types[i] + "'" ;
+   394→   407→                        else if( param_types[i] != null )
+   395→   408→                            type = param_types[i];
+   396→   409→                    } 
+   397→   410→                    code +=
+   398→   411→                        "this.addInput('" +
+   399→   412→                        names[i] +
+   400→   413→                        "'," +
+   401→   414→                        type +
+   402→   415→                        ");\n";
+   403→   416→                }
+   404→   417→            }
+   405→   418→            if(return_type !== null) //null means no output
+   406→   419→            code +=
+   407→   420→                "this.addOutput('out'," +
+   408→   421→                (return_type != null ? (return_type.constructor === String ? "'" + return_type + "'" : return_type) : 0) +
+   409→   422→                ");\n";
+   410→   423→            if (properties) {
+   411→   424→                code +=
+   412→   425→                    "this.properties = " + JSON.stringify(properties) + ";\n";
+   413→   426→            }
+   414→   427→            var classobj = Function(code);
+   415→   428→            classobj.title = name.split("/").pop();
+   416→   429→            classobj.desc = "Generated from " + func.name;
+   417→   430→            classobj.prototype.onExecute = function onExecute() {
+   418→   431→                for (var i = 0; i < params.length; ++i) {
+   419→   432→                    params[i] = this.getInputData(i);
+   420→   433→                }
+   421→   434→                var r = func.apply(this, params);
+   422→   435→                this.setOutputData(0, r);
+   423→   436→            };
+   424→   437→            this.registerNodeType(name, classobj);
+   425→   438→            return classobj;
+   426→   439→        },
+   427→   440→
+   428→   441→        /**
+   429→   442→         * Removes all previously registered node's types
+   430→   443→         */
+   431→   444→        clearRegisteredTypes: function() {
+   432→   445→            this.registered_node_types = {};
+   433→   446→            this.node_types_by_file_extension = {};
+   434→   447→            this.Nodes = {};
+   435→   448→            this.searchbox_extras = {};
+   436→   449→        },
+   437→   450→
+   438→   451→        /**
+   439→   452→         * Adds this method to all nodetypes, existing and to be created
+   440→   453→         * (You can add it to LGraphNode.prototype but then existing node types wont have it)
+   441→   454→         * @method addNodeMethod
+   442→   455→         * @param {Function} func
+   443→   456→         */
+   444→   457→        addNodeMethod: function(name, func) {
+   445→   458→            LGraphNode.prototype[name] = func;
+   446→   459→            for (var i in this.registered_node_types) {
+   447→   460→                var type = this.registered_node_types[i];
+   448→   461→                if (type.prototype[name]) {
+   449→   462→                    type.prototype["_" + name] = type.prototype[name];
+   450→   463→                } //keep old in case of replacing
+   451→   464→                type.prototype[name] = func;
+   452→   465→            }
+   453→   466→        },
+   454→   467→
+   455→   468→        /**
+   456→   469→         * Create a node of a given type with a name. The node is not attached to any graph yet.
+   457→   470→         * @method createNode
+   458→   471→         * @param {String} type full name of the node class. p.e. "math/sin"
+   459→   472→         * @param {String} name a name to distinguish from other nodes
+   460→   473→         * @param {Object} options to set options
+   461→   474→         */
+   462→   475→
+   463→   476→        createNode: function(type, title, options) {
+   464→   477→            var base_class = this.registered_node_types[type];
+   465→   478→            if (!base_class) {
+   466→   479→                if (LiteGraph.debug) {
+   467→   480→                    console.log(
+   468→   481→                        'GraphNode type "' + type + '" not registered.'
+   469→   482→                    );
+   470→   483→                }
+   471→   484→                return null;
+   472→   485→            }
+   473→   486→
+   474→   487→            var prototype = base_class.prototype || base_class;
+   475→   488→
+   476→   489→            title = title || base_class.title || type;
+   477→   490→
+   478→   491→            var node = null;
+   479→   492→
+   480→   493→            if (LiteGraph.catch_exceptions) {
+   481→   494→                try {
+   482→   495→                    node = new base_class(title);
+   483→   496→                } catch (err) {
+   484→   497→                    console.error(err);
+   485→   498→                    return null;
+   486→   499→                }
+   487→   500→            } else {
+   488→   501→                node = new base_class(title);
+   489→   502→            }
+   490→   503→
+   491→   504→            node.type = type;
+   492→   505→
+   493→   506→            if (!node.title && title) {
+   494→   507→                node.title = title;
+   495→   508→            }
+   496→   509→            if (!node.properties) {
+   497→   510→                node.properties = {};
+   498→   511→            }
+   499→   512→            if (!node.properties_info) {
+   500→   513→                node.properties_info = [];
+   501→   514→            }
+   502→   515→            if (!node.flags) {
+   503→   516→                node.flags = {};
+   504→   517→            }
+   505→   518→            if (!node.size) {
+   506→   519→                node.size = node.computeSize();
+   507→   520→                                //call onresize?
+   508→   521→            }
+   509→   522→            if (!node.pos) {
+   510→   523→                node.pos = LiteGraph.DEFAULT_POSITION.concat();
+   511→   524→            }
+   512→   525→            if (!node.mode) {
+   513→   526→                node.mode = LiteGraph.ALWAYS;
+   514→   527→            }
+   515→   528→
+   516→   529→            //extra options
+   517→   530→            if (options) {
+   518→   531→                for (var i in options) {
+   519→   532→                    node[i] = options[i];
+   520→   533→                }
+   521→   534→            }
+   522→   535→
+   523→   536→                        // callback
+   524→   537→            if ( node.onNodeCreated ) {
+   525→   538→                node.onNodeCreated();
+   526→   539→            }
+   527→   540→            
+   528→   541→            return node;
+   529→   542→        },
+   530→   543→
+   531→   544→        /**
+   532→   545→         * Returns a registered node type with a given name
+   533→   546→         * @method getNodeType
+   534→   547→         * @param {String} type full name of the node class. p.e. "math/sin"
+   535→   548→         * @return {Class} the node class
+   536→   549→         */
+   537→   550→        getNodeType: function(type) {
+   538→   551→            return this.registered_node_types[type];
+   539→   552→        },
+   540→   553→
+   541→   554→        /**
+   542→   555→         * Returns a list of node types matching one category
+   543→   556→         * @method getNodeType
+   544→   557→         * @param {String} category category name
+   545→   558→         * @return {Array} array with all the node classes
+   546→   559→         */
+   547→   560→
+   548→   561→        getNodeTypesInCategory: function(category, filter) {
+   549→   562→            var r = [];
+   550→   563→            for (var i in this.registered_node_types) {
+   551→   564→                var type = this.registered_node_types[i];
+   552→   565→                if (type.filter != filter) {
+   553→   566→                    continue;
+   554→   567→                }
+   555→   568→
+   556→   569→                if (category == "") {
+   557→   570→                    if (type.category == null) {
+   558→   571→                        r.push(type);
+   559→   572→                    }
+   560→   573→                } else if (type.category == category) {
+   561→   574→                    r.push(type);
+   562→   575→                }
+   563→   576→            }
+   564→   577→
+   565→   578→            if (this.auto_sort_node_types) {
+   566→   579→                r.sort(function(a,b){return a.title.localeCompare(b.title)});
+   567→   580→            }
+   568→   581→
+   569→   582→            return r;
+   570→   583→        },
+   571→   584→
+   572→   585→        /**
+   573→   586→         * Returns a list with all the node type categories
+   574→   587→         * @method getNodeTypesCategories
+   575→   588→         * @param {String} filter only nodes with ctor.filter equal can be shown
+   576→   589→         * @return {Array} array with all the names of the categories
+   577→   590→         */
+   578→   591→        getNodeTypesCategories: function( filter ) {
+   579→   592→            var categories = { "": 1 };
+   580→   593→            for (var i in this.registered_node_types) {
+   581→   594→                                var type = this.registered_node_types[i];
+   582→   595→                if ( type.category && !type.skip_list )
+   583→   596→                {
+   584→   597→                                        if(type.filter != filter)
+   585→   598→                                                continue;
+   586→   599→                    categories[type.category] = 1;
+   587→   600→                }
+   588→   601→            }
+   589→   602→            var result = [];
+   590→   603→            for (var i in categories) {
+   591→   604→                result.push(i);
+   592→   605→            }
+   593→   606→            return this.auto_sort_node_types ? result.sort() : result;
+   594→   607→        },
+   595→   608→
+   596→   609→        //debug purposes: reloads all the js scripts that matches a wildcard
+   597→   610→        reloadNodes: function(folder_wildcard) {
+   598→   611→            var tmp = document.getElementsByTagName("script");
+   599→   612→            //weird, this array changes by its own, so we use a copy
+   600→   613→            var script_files = [];
+   601→   614→            for (var i=0; i < tmp.length; i++) {
+   602→   615→                script_files.push(tmp[i]);
+   603→   616→            }
+   604→   617→
+   605→   618→            var docHeadObj = document.getElementsByTagName("head")[0];
+   606→   619→            folder_wildcard = document.location.href + folder_wildcard;
+   607→   620→
+   608→   621→            for (var i=0; i < script_files.length; i++) {
+   609→   622→                var src = script_files[i].src;
+   610→   623→                if (
+   611→   624→                    !src ||
+   612→   625→                    src.substr(0, folder_wildcard.length) != folder_wildcard
+   613→   626→                ) {
+   614→   627→                    continue;
+   615→   628→                }
+   616→   629→
+   617→   630→                try {
+   618→   631→                    if (LiteGraph.debug) {
+   619→   632→                        console.log("Reloading: " + src);
+   620→   633→                    }
+   621→   634→                    var dynamicScript = document.createElement("script");
+   622→   635→                    dynamicScript.type = "text/javascript";
+   623→   636→                    dynamicScript.src = src;
+   624→   637→                    docHeadObj.appendChild(dynamicScript);
+   625→   638→                    docHeadObj.removeChild(script_files[i]);
+   626→   639→                } catch (err) {
+   627→   640→                    if (LiteGraph.throw_errors) {
+   628→   641→                        throw err;
+   629→   642→                    }
+   630→   643→                    if (LiteGraph.debug) {
+   631→   644→                        console.log("Error while reloading " + src);
+   632→   645→                    }
+   633→   646→                }
+   634→   647→            }
+   635→   648→
+   636→   649→            if (LiteGraph.debug) {
+   637→   650→                console.log("Nodes reloaded");
+   638→   651→            }
+   639→   652→        },
+   640→   653→
+   641→   654→        //separated just to improve if it doesn't work
+   642→   655→        cloneObject: function(obj, target) {
+   643→   656→            if (obj == null) {
+   644→   657→                return null;
+   645→   658→            }
+   646→   659→            var r = JSON.parse(JSON.stringify(obj));
+   647→   660→            if (!target) {
+   648→   661→                return r;
+   649→   662→            }
+   650→   663→
+   651→   664→            for (var i in r) {
+   652→   665→                target[i] = r[i];
+   653→   666→            }
+   654→   667→            return target;
+   655→   668→        },
+   656→   669→
+   657→   670→        /*
+   658→   671→         * https://gist.github.com/jed/982883?permalink_comment_id=852670#gistcomment-852670
+   659→   672→         */
+   660→   673→        uuidv4: function() {
+   661→   674→            return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,a=>(a^Math.random()*16>>a/4).toString(16));
+   662→   675→        },
+   663→   676→
+   664→   677→        /**
+   665→   678→         * Returns if the types of two slots are compatible (taking into account wildcards, etc)
+   666→   679→         * @method isValidConnection
+   667→   680→         * @param {String} type_a
+   668→   681→         * @param {String} type_b
+   669→   682→         * @return {Boolean} true if they can be connected
+   670→   683→         */
+   671→   684→        isValidConnection: function(type_a, type_b) {
+   672→   685→                        if (type_a=="" || type_a==="*") type_a = 0;
+   673→   686→                        if (type_b=="" || type_b==="*") type_b = 0;
+   674→   687→            if (
+   675→   688→                !type_a //generic output
+   676→   689→                || !type_b // generic input
+   677→   690→                || type_a == type_b //same type (is valid for triggers)
+   678→   691→                || (type_a == LiteGraph.EVENT && type_b == LiteGraph.ACTION)
+   679→   692→            ) {
+   680→   693→                return true;
+   681→   694→            }
+   682→   695→
+   683→   696→            // Enforce string type to handle toLowerCase call (-1 number not ok)
+   684→   697→            type_a = String(type_a);
+   685→   698→            type_b = String(type_b);
+   686→   699→            type_a = type_a.toLowerCase();
+   687→   700→            type_b = type_b.toLowerCase();
+   688→   701→
+   689→   702→            // For nodes supporting multiple connection types
+   690→   703→            if (type_a.indexOf(",") == -1 && type_b.indexOf(",") == -1) {
+   691→   704→                return type_a == type_b;
+   692→   705→            }
+   693→   706→
+   694→   707→            // Check all permutations to see if one is valid
+   695→   708→            var supported_types_a = type_a.split(",");
+   696→   709→            var supported_types_b = type_b.split(",");
+   697→   710→            for (var i = 0; i < supported_types_a.length; ++i) {
+   698→   711→                for (var j = 0; j < supported_types_b.length; ++j) {
+   699→   712→                    if(this.isValidConnection(supported_types_a[i],supported_types_b[j])){
+   700→   713→                                        //if (supported_types_a[i] == supported_types_b[j]) {
+   701→   714→                        return true;
+   702→   715→                    }
+   703→   716→                }
+   704→   717→            }
+   705→   718→
+   706→   719→            return false;
+   707→   720→        },
+   708→   721→
+   709→   722→        /**
+   710→   723→         * Register a string in the search box so when the user types it it will recommend this node
+   711→   724→         * @method registerSearchboxExtra
+   712→   725→         * @param {String} node_type the node recommended
+   713→   726→         * @param {String} description text to show next to it
+   714→   727→         * @param {Object} data it could contain info of how the node should be configured
+   715→   728→         * @return {Boolean} true if they can be connected
+   716→   729→         */
+   717→   730→        registerSearchboxExtra: function(node_type, description, data) {
+   718→   731→            this.searchbox_extras[description.toLowerCase()] = {
+   719→   732→                type: node_type,
+   720→   733→                desc: description,
+   721→   734→                data: data
+   722→   735→            };
+   723→   736→        },
+   724→   737→
+   725→   738→        /**
+   726→   739→         * Wrapper to load files (from url using fetch or from file using FileReader)
+   727→   740→         * @method fetchFile
+   728→   741→         * @param {String|File|Blob} url the url of the file (or the file itself)
+   729→   742→         * @param {String} type an string to know how to fetch it: "text","arraybuffer","json","blob"
+   730→   743→         * @param {Function} on_complete callback(data)
+   731→   744→         * @param {Function} on_error in case of an error
+   732→   745→         * @return {FileReader|Promise} returns the object used to 
+   733→   746→         */
+   734→   747→                fetchFile: function( url, type, on_complete, on_error ) {
+   735→   748→                        var that = this;
+   736→   749→                        if(!url)
+   737→   750→                                return null;
+   738→   751→
+   739→   752→                        type = type || "text";
+   740→   753→                        if( url.constructor === String )
+   741→   754→                        {
+   742→   755→                                if (url.substr(0, 4) == "http" && LiteGraph.proxy) {
+   743→   756→                                        url = LiteGraph.proxy + url.substr(url.indexOf(":") + 3);
+   744→   757→                                }
+   745→   758→                                return fetch(url)
+   746→   759→                                .then(function(response) {
+   747→   760→                                        if(!response.ok)
+   748→   761→                                                 throw new Error("File not found"); //it will be catch below
+   749→   762→                                        if(type == "arraybuffer")
+   750→   763→                                                return response.arrayBuffer();
+   751→   764→                                        else if(type == "text" || type == "string")
+   752→   765→                                                return response.text();
+   753→   766→                                        else if(type == "json")
+   754→   767→                                                return response.json();
+   755→   768→                                        else if(type == "blob")
+   756→   769→                                                return response.blob();
+   757→   770→                                })
+   758→   771→                                .then(function(data) {
+   759→   772→                                        if(on_complete)
+   760→   773→                                                on_complete(data);
+   761→   774→                                })
+   762→   775→                                .catch(function(error) {
+   763→   776→                                        console.error("error fetching file:",url);
+   764→   777→                                        if(on_error)
+   765→   778→                                                on_error(error);
+   766→   779→                                });
+   767→   780→                        }
+   768→   781→                        else if( url.constructor === File || url.constructor === Blob)
+   769→   782→                        {
+   770→   783→                                var reader = new FileReader();
+   771→   784→                                reader.onload = function(e)
+   772→   785→                                {
+   773→   786→                                        var v = e.target.result;
+   774→   787→                                        if( type == "json" )
+   775→   788→                                                v = JSON.parse(v);
+   776→   789→                                        if(on_complete)
+   777→   790→                                                on_complete(v);
+   778→   791→                                }
+   779→   792→                                if(type == "arraybuffer")
+   780→   793→                                        return reader.readAsArrayBuffer(url);
+   781→   794→                                else if(type == "text" || type == "json")
+   782→   795→                                        return reader.readAsText(url);
+   783→   796→                                else if(type == "blob")
+   784→   797→                                        return reader.readAsBinaryString(url);
+   785→   798→                        }
+   786→   799→                        return null;
+   787→   800→                }
+   788→   801→    });
+   789→   802→
+   790→   803→    //timer that works everywhere
+   791→   804→    if (typeof performance != "undefined") {
+   792→   805→        LiteGraph.getTime = performance.now.bind(performance);
+   793→   806→    } else if (typeof Date != "undefined" && Date.now) {
+   794→   807→        LiteGraph.getTime = Date.now.bind(Date);
+   795→   808→    } else if (typeof process != "undefined") {
+   796→   809→        LiteGraph.getTime = function() {
+   797→   810→            var t = process.hrtime();
+   798→   811→            return t[0] * 0.001 + t[1] * 1e-6;
+   799→   812→        };
+   800→   813→    } else {
+   801→   814→        LiteGraph.getTime = function getTime() {
+   802→   815→            return new Date().getTime();
+   803→   816→        };
+   804→   817→    }
+   805→   818→
+   806→   819→    //*********************************************************************************
+   807→   820→    // LGraph CLASS
+   808→   821→    //*********************************************************************************
+   809→   822→
+   810→   823→    /**
+   811→   824→     * LGraph is the class that contain a full graph. We instantiate one and add nodes to it, and then we can run the execution loop.
+   812→   825→         * supported callbacks:
+   813→   826→                + onNodeAdded: when a new node is added to the graph
+   814→   827→                + onNodeRemoved: when a node inside this graph is removed
+   815→   828→                + onNodeConnectionChange: some connection has changed in the graph (connected or disconnected)
+   816→   829→     *
+   817→   830→     * @class LGraph
+   818→   831→     * @constructor
+   819→   832→     * @param {Object} o data from previous serialization [optional]
+   820→   833→     */
+   821→   834→
+   822→   835→    function LGraph(o) {
+   823→   836→        if (LiteGraph.debug) {
+   824→   837→            console.log("Graph created");
+   825→   838→        }
+   826→   839→        this.list_of_graphcanvas = null;
+   827→   840→        this.clear();
+   828→   841→
+   829→   842→        if (o) {
+   830→   843→            this.configure(o);
+   831→
+   832→[showing lines 14-843 of 14425; use offset=844 with limit to continue reading]

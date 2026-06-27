@@ -1,9 +1,8 @@
 /**
  * LGraphGroup - Visual grouping rectangle for nodes
- * 
+ *
  * Refactored from a constructor function + prototype to ES6 class.
  * Original borrowed isPointInside and setDirtyCanvas from LGraphNode.prototype.
- * Now properly inherits those via a shared base or direct implementation.
  */
 
 import { LiteGraph } from "./LiteGraph.js";
@@ -12,10 +11,19 @@ class LGraphGroup {
   constructor(title) {
     this.title = title || "Group";
     this.font_size = 24;
-    this.color = LiteGraph.DEFAULT_GROUP_FONT;
-    this._bounding = new Float32Array(4);
-    this._pos = new Float32Array([10, 10]);
-    this._size = new Float32Array([200, 200]);
+    // Pick a default group color that actually exists. Original used
+    // `LGraphCanvas.node_colors.pale_blue.groupcolor` ("#3f789e"); we use a
+    // hardcoded fallback so we don't have to import LGraphCanvas here.
+    this.color = "#3f789e";
+
+    // Restore the original memory-sharing layout: `_pos` and `_size` are
+    // subarray *views* of `_bounding`, so mutating `_pos[0]` (e.g. via
+    // `move()`) automatically updates `_bounding[0]`. The previous refactor
+    // used three independent Float32Arrays, which broke serialize-after-move.
+    this._bounding = new Float32Array([10, 10, 140, 80]);
+    this._pos = this._bounding.subarray(0, 2);
+    this._size = this._bounding.subarray(2, 4);
+
     this._nodes = [];
     this.graph = null;
 
@@ -34,8 +42,10 @@ class LGraphGroup {
     Object.defineProperty(this, "size", {
       set(v) {
         if (!v || v.length < 2) return;
-        this._size[0] = v[0];
-        this._size[1] = v[1];
+        // Match original size clamps so groups can't be shrunk below their
+        // default minimum dimensions.
+        this._size[0] = Math.max(140, v[0]);
+        this._size[1] = Math.max(80, v[1]);
       },
       get() {
         return this._size;
@@ -46,9 +56,16 @@ class LGraphGroup {
 
   configure(o) {
     this.title = o.title;
-    this._bounding = new Float32Array(o.bounding);
+    // In-place set keeps the subarray sharing intact (a fresh `new
+    // Float32Array(o.bounding)` would disconnect _pos/_size from _bounding).
+    if (o.bounding) {
+      this._bounding.set(o.bounding);
+    }
     this.color = o.color;
     this.font_size = o.font_size;
+    // Older serializations may carry explicit `pos`/`size` fields — apply
+    // them too for backward compatibility, but they write through the
+    // subarray views so `_bounding` stays in sync.
     if (o.pos) {
       this._pos[0] = o.pos[0];
       this._pos[1] = o.pos[1];
@@ -60,20 +77,29 @@ class LGraphGroup {
   }
 
   serialize() {
-    const o = {
+    const b = this._bounding;
+    // Match original rounding so saved graphs don't accumulate float drift.
+    return {
       title: this.title,
-      bounding: Array.from(this._bounding),
+      bounding: [
+        Math.round(b[0]),
+        Math.round(b[1]),
+        Math.round(b[2]),
+        Math.round(b[3]),
+      ],
       color: this.color,
       font_size: this.font_size,
-      pos: [this._pos[0], this._pos[1]],
-      size: [this._size[0], this._size[1]],
     };
-    return o;
   }
 
-  move(deltaX, deltaY) {
+  move(deltaX, deltaY, ignore_nodes) {
     this._pos[0] += deltaX;
     this._pos[1] += deltaY;
+    // Original third parameter lets callers move the rectangle without
+    // dragging contained nodes (used during resize, etc.).
+    if (ignore_nodes) {
+      return;
+    }
     for (let i = 0; i < this._nodes.length; ++i) {
       const node = this._nodes[i];
       node.pos[0] += deltaX;
@@ -82,7 +108,7 @@ class LGraphGroup {
   }
 
   recomputeInsideNodes() {
-    this._nodes = [];
+    this._nodes.length = 0;
     if (!this.graph) return;
     const nodes = this.graph._nodes;
     const nodeBounding = new Float32Array(4);

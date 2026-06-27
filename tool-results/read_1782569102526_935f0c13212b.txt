@@ -1,0 +1,602 @@
+ 11578→                if (timeout_close) {
+ 11579→                    clearTimeout(timeout_close);
+ 11580→                    timeout_close = null;
+ 11581→                }
+ 11582→            });
+ 11583→            LiteGraph.pointerListenerAdd(dialog,"leave", function(e) {
+ 11584→                if (prevent_timeout){
+ 11585→                    return;
+ 11586→                }
+ 11587→                timeout_close = setTimeout(function() {
+ 11588→                    dialog.close();
+ 11589→                }, 500);
+ 11590→            });
+ 11591→            // if filtering, check focus changed to comboboxes and prevent closing
+ 11592→            if (options.do_type_filter){
+ 11593→                selIn.addEventListener("click", function(e) {
+ 11594→                    prevent_timeout++;
+ 11595→                });
+ 11596→                selIn.addEventListener("blur", function(e) {
+ 11597→                   prevent_timeout = 0;
+ 11598→                });
+ 11599→                selIn.addEventListener("change", function(e) {
+ 11600→                    prevent_timeout = -1;
+ 11601→                });
+ 11602→                selOut.addEventListener("click", function(e) {
+ 11603→                    prevent_timeout++;
+ 11604→                });
+ 11605→                selOut.addEventListener("blur", function(e) {
+ 11606→                   prevent_timeout = 0;
+ 11607→                });
+ 11608→                selOut.addEventListener("change", function(e) {
+ 11609→                    prevent_timeout = -1;
+ 11610→                });
+ 11611→            }
+ 11612→        }
+ 11613→
+ 11614→        if (that.search_box) {
+ 11615→            that.search_box.close();
+ 11616→        }
+ 11617→        that.search_box = dialog;
+ 11618→
+ 11619→        var helper = dialog.querySelector(".helper");
+ 11620→
+ 11621→        var first = null;
+ 11622→        var timeout = null;
+ 11623→        var selected = null;
+ 11624→
+ 11625→        var input = dialog.querySelector("input");
+ 11626→        if (input) {
+ 11627→            input.addEventListener("blur", function(e) {
+ 11628→                if(that.search_box)
+ 11629→                    this.focus();
+ 11630→            });
+ 11631→            input.addEventListener("keydown", function(e) {
+ 11632→                if (e.keyCode == 38) {
+ 11633→                    //UP
+ 11634→                    changeSelection(false);
+ 11635→                } else if (e.keyCode == 40) {
+ 11636→                    //DOWN
+ 11637→                    changeSelection(true);
+ 11638→                } else if (e.keyCode == 27) {
+ 11639→                    //ESC
+ 11640→                    dialog.close();
+ 11641→                } else if (e.keyCode == 13) {
+ 11642→                    refreshHelper();
+ 11643→                    if (selected) {
+ 11644→                        select(selected.innerHTML);
+ 11645→                    } else if (first) {
+ 11646→                        select(first);
+ 11647→                    } else {
+ 11648→                        dialog.close();
+ 11649→                    }
+ 11650→                } else {
+ 11651→                    if (timeout) {
+ 11652→                        clearInterval(timeout);
+ 11653→                    }
+ 11654→                    timeout = setTimeout(refreshHelper, 250);
+ 11655→                    return;
+ 11656→                }
+ 11657→                e.preventDefault();
+ 11658→                e.stopPropagation();
+ 11659→                                e.stopImmediatePropagation();
+ 11660→                                return true;
+ 11661→            });
+ 11662→        }
+ 11663→        
+ 11664→        // if should filter on type, load and fill selected and choose elements if passed
+ 11665→        if (options.do_type_filter){
+ 11666→            if (selIn){
+ 11667→                var aSlots = LiteGraph.slot_types_in;
+ 11668→                var nSlots = aSlots.length; // this for object :: Object.keys(aSlots).length;
+ 11669→                
+ 11670→                if (options.type_filter_in == LiteGraph.EVENT || options.type_filter_in == LiteGraph.ACTION)
+ 11671→                    options.type_filter_in = "_event_";
+ 11672→                /* this will filter on * .. but better do it manually in case
+ 11673→                else if(options.type_filter_in === "" || options.type_filter_in === 0)
+ 11674→                    options.type_filter_in = "*";*/
+ 11675→                
+ 11676→                for (var iK=0; iK<nSlots; iK++){
+ 11677→                    var opt = document.createElement('option');
+ 11678→                    opt.value = aSlots[iK];
+ 11679→                    opt.innerHTML = aSlots[iK];
+ 11680→                    selIn.appendChild(opt);
+ 11681→                    if(options.type_filter_in !==false && (options.type_filter_in+"").toLowerCase() == (aSlots[iK]+"").toLowerCase()){
+ 11682→                        //selIn.selectedIndex ..
+ 11683→                        opt.selected = true;
+ 11684→                                                //console.log("comparing IN "+options.type_filter_in+" :: "+aSlots[iK]);
+ 11685→                        }else{
+ 11686→                                                //console.log("comparing OUT "+options.type_filter_in+" :: "+aSlots[iK]);
+ 11687→                                        }
+ 11688→                                }
+ 11689→                selIn.addEventListener("change",function(){
+ 11690→                    refreshHelper();
+ 11691→                });
+ 11692→            }
+ 11693→            if (selOut){
+ 11694→                var aSlots = LiteGraph.slot_types_out;
+ 11695→                var nSlots = aSlots.length; // this for object :: Object.keys(aSlots).length; 
+ 11696→                
+ 11697→                if (options.type_filter_out == LiteGraph.EVENT || options.type_filter_out == LiteGraph.ACTION)
+ 11698→                    options.type_filter_out = "_event_";
+ 11699→                /* this will filter on * .. but better do it manually in case
+ 11700→                else if(options.type_filter_out === "" || options.type_filter_out === 0)
+ 11701→                    options.type_filter_out = "*";*/
+ 11702→                
+ 11703→                for (var iK=0; iK<nSlots; iK++){
+ 11704→                    var opt = document.createElement('option');
+ 11705→                    opt.value = aSlots[iK];
+ 11706→                    opt.innerHTML = aSlots[iK];
+ 11707→                    selOut.appendChild(opt);
+ 11708→                    if(options.type_filter_out !==false && (options.type_filter_out+"").toLowerCase() == (aSlots[iK]+"").toLowerCase()){
+ 11709→                        //selOut.selectedIndex ..
+ 11710→                        opt.selected = true;
+ 11711→                    }
+ 11712→                }
+ 11713→                selOut.addEventListener("change",function(){
+ 11714→                    refreshHelper();
+ 11715→                });
+ 11716→            }
+ 11717→        }
+ 11718→        
+ 11719→        //compute best position
+ 11720→        var rect = canvas.getBoundingClientRect();
+ 11721→
+ 11722→        var left = ( event ? event.clientX : (rect.left + rect.width * 0.5) ) - 80;
+ 11723→        var top = ( event ? event.clientY : (rect.top + rect.height * 0.5) ) - 20;
+ 11724→        dialog.style.left = left + "px";
+ 11725→        dialog.style.top = top + "px";
+ 11726→
+ 11727→                //To avoid out of screen problems
+ 11728→                if(event.layerY > (rect.height - 200)) 
+ 11729→            helper.style.maxHeight = (rect.height - event.layerY - 20) + "px";
+ 11730→
+ 11731→                /*
+ 11732→        var offsetx = -20;
+ 11733→        var offsety = -20;
+ 11734→        if (rect) {
+ 11735→            offsetx -= rect.left;
+ 11736→            offsety -= rect.top;
+ 11737→        }
+ 11738→
+ 11739→        if (event) {
+ 11740→            dialog.style.left = event.clientX + offsetx + "px";
+ 11741→            dialog.style.top = event.clientY + offsety + "px";
+ 11742→        } else {
+ 11743→            dialog.style.left = canvas.width * 0.5 + offsetx + "px";
+ 11744→            dialog.style.top = canvas.height * 0.5 + offsety + "px";
+ 11745→        }
+ 11746→        canvas.parentNode.appendChild(dialog);
+ 11747→                */
+ 11748→
+ 11749→        input.focus();
+ 11750→        if (options.show_all_on_open) refreshHelper();
+ 11751→
+ 11752→        function select(name) {
+ 11753→            if (name) {
+ 11754→                if (that.onSearchBoxSelection) {
+ 11755→                    that.onSearchBoxSelection(name, event, graphcanvas);
+ 11756→                } else {
+ 11757→                    var extra = LiteGraph.searchbox_extras[name.toLowerCase()];
+ 11758→                    if (extra) {
+ 11759→                        name = extra.type;
+ 11760→                    }
+ 11761→
+ 11762→                                        graphcanvas.graph.beforeChange();
+ 11763→                    var node = LiteGraph.createNode(name);
+ 11764→                    if (node) {
+ 11765→                        node.pos = graphcanvas.convertEventToCanvasOffset(
+ 11766→                            event
+ 11767→                        );
+ 11768→                        graphcanvas.graph.add(node, false);
+ 11769→                    }
+ 11770→
+ 11771→                    if (extra && extra.data) {
+ 11772→                        if (extra.data.properties) {
+ 11773→                            for (var i in extra.data.properties) {
+ 11774→                                node.addProperty( i, extra.data.properties[i] );
+ 11775→                            }
+ 11776→                        }
+ 11777→                        if (extra.data.inputs) {
+ 11778→                            node.inputs = [];
+ 11779→                            for (var i in extra.data.inputs) {
+ 11780→                                node.addOutput(
+ 11781→                                    extra.data.inputs[i][0],
+ 11782→                                    extra.data.inputs[i][1]
+ 11783→                                );
+ 11784→                            }
+ 11785→                        }
+ 11786→                        if (extra.data.outputs) {
+ 11787→                            node.outputs = [];
+ 11788→                            for (var i in extra.data.outputs) {
+ 11789→                                node.addOutput(
+ 11790→                                    extra.data.outputs[i][0],
+ 11791→                                    extra.data.outputs[i][1]
+ 11792→                                );
+ 11793→                            }
+ 11794→                        }
+ 11795→                        if (extra.data.title) {
+ 11796→                            node.title = extra.data.title;
+ 11797→                        }
+ 11798→                        if (extra.data.json) {
+ 11799→                            node.configure(extra.data.json);
+ 11800→                        }
+ 11801→
+ 11802→                    }
+ 11803→
+ 11804→                    // join node after inserting
+ 11805→                    if (options.node_from){
+ 11806→                        var iS = false;
+ 11807→                        switch (typeof options.slot_from){
+ 11808→                            case "string":
+ 11809→                                iS = options.node_from.findOutputSlot(options.slot_from);    
+ 11810→                            break;
+ 11811→                            case "object":
+ 11812→                                if (options.slot_from.name){
+ 11813→                                    iS = options.node_from.findOutputSlot(options.slot_from.name);
+ 11814→                                }else{
+ 11815→                                    iS = -1;
+ 11816→                                }
+ 11817→                                if (iS==-1 && typeof options.slot_from.slot_index !== "undefined") iS = options.slot_from.slot_index;
+ 11818→                            break;
+ 11819→                            case "number":
+ 11820→                                iS = options.slot_from;
+ 11821→                            break;
+ 11822→                            default:
+ 11823→                                iS = 0; // try with first if no name set
+ 11824→                        }
+ 11825→                        if (typeof options.node_from.outputs[iS] !== "undefined"){
+ 11826→                            if (iS!==false && iS>-1){
+ 11827→                                options.node_from.connectByType( iS, node, options.node_from.outputs[iS].type );
+ 11828→                            }
+ 11829→                        }else{
+ 11830→                            // console.warn("cant find slot " + options.slot_from);
+ 11831→                        }
+ 11832→                    }
+ 11833→                    if (options.node_to){
+ 11834→                        var iS = false;
+ 11835→                        switch (typeof options.slot_from){
+ 11836→                            case "string":
+ 11837→                                iS = options.node_to.findInputSlot(options.slot_from);    
+ 11838→                            break;
+ 11839→                            case "object":
+ 11840→                                if (options.slot_from.name){
+ 11841→                                    iS = options.node_to.findInputSlot(options.slot_from.name);
+ 11842→                                }else{
+ 11843→                                    iS = -1;
+ 11844→                                }
+ 11845→                                if (iS==-1 && typeof options.slot_from.slot_index !== "undefined") iS = options.slot_from.slot_index;
+ 11846→                            break;
+ 11847→                            case "number":
+ 11848→                                iS = options.slot_from;
+ 11849→                            break;
+ 11850→                            default:
+ 11851→                                iS = 0; // try with first if no name set
+ 11852→                        }
+ 11853→                        if (typeof options.node_to.inputs[iS] !== "undefined"){
+ 11854→                            if (iS!==false && iS>-1){
+ 11855→                                // try connection
+ 11856→                                options.node_to.connectByTypeOutput(iS,node,options.node_to.inputs[iS].type);
+ 11857→                            }
+ 11858→                        }else{
+ 11859→                            // console.warn("cant find slot_nodeTO " + options.slot_from);
+ 11860→                        }
+ 11861→                    }
+ 11862→                    
+ 11863→                    graphcanvas.graph.afterChange();
+ 11864→                }
+ 11865→            }
+ 11866→
+ 11867→            dialog.close();
+ 11868→        }
+ 11869→
+ 11870→        function changeSelection(forward) {
+ 11871→            var prev = selected;
+ 11872→            if (selected) {
+ 11873→                selected.classList.remove("selected");
+ 11874→            }
+ 11875→            if (!selected) {
+ 11876→                selected = forward
+ 11877→                    ? helper.childNodes[0]
+ 11878→                    : helper.childNodes[helper.childNodes.length];
+ 11879→            } else {
+ 11880→                selected = forward
+ 11881→                    ? selected.nextSibling
+ 11882→                    : selected.previousSibling;
+ 11883→                if (!selected) {
+ 11884→                    selected = prev;
+ 11885→                }
+ 11886→            }
+ 11887→            if (!selected) {
+ 11888→                return;
+ 11889→            }
+ 11890→            selected.classList.add("selected");
+ 11891→            selected.scrollIntoView({block: "end", behavior: "smooth"});
+ 11892→        }
+ 11893→
+ 11894→        function refreshHelper() {
+ 11895→            timeout = null;
+ 11896→            var str = input.value;
+ 11897→            first = null;
+ 11898→            helper.innerHTML = "";
+ 11899→            if (!str && !options.show_all_if_empty) {
+ 11900→                return;
+ 11901→            }
+ 11902→
+ 11903→            if (that.onSearchBox) {
+ 11904→                var list = that.onSearchBox(helper, str, graphcanvas);
+ 11905→                if (list) {
+ 11906→                    for (var i = 0; i < list.length; ++i) {
+ 11907→                        addResult(list[i]);
+ 11908→                    }
+ 11909→                }
+ 11910→            } else {
+ 11911→                var c = 0;
+ 11912→                str = str.toLowerCase();
+ 11913→                                var filter = graphcanvas.filter || graphcanvas.graph.filter;
+ 11914→
+ 11915→                // filter by type preprocess
+ 11916→                if(options.do_type_filter && that.search_box){
+ 11917→                    var sIn = that.search_box.querySelector(".slot_in_type_filter");
+ 11918→                    var sOut = that.search_box.querySelector(".slot_out_type_filter");
+ 11919→                }else{
+ 11920→                    var sIn = false;
+ 11921→                    var sOut = false;
+ 11922→                }
+ 11923→                
+ 11924→                //extras
+ 11925→                for (var i in LiteGraph.searchbox_extras) {
+ 11926→                    var extra = LiteGraph.searchbox_extras[i];
+ 11927→                    if ((!options.show_all_if_empty || str) && extra.desc.toLowerCase().indexOf(str) === -1) {
+ 11928→                        continue;
+ 11929→                    }
+ 11930→                                        var ctor = LiteGraph.registered_node_types[ extra.type ];
+ 11931→                                        if( ctor && ctor.filter != filter )
+ 11932→                                                continue;
+ 11933→                    if( ! inner_test_filter(extra.type) )
+ 11934→                        continue;
+ 11935→                    addResult( extra.desc, "searchbox_extra" );
+ 11936→                    if ( LGraphCanvas.search_limit !== -1 && c++ > LGraphCanvas.search_limit ) {
+ 11937→                        break;
+ 11938→                    }
+ 11939→                }
+ 11940→
+ 11941→                                var filtered = null;
+ 11942→                if (Array.prototype.filter) { //filter supported
+ 11943→                    var keys = Object.keys( LiteGraph.registered_node_types ); //types
+ 11944→                    var filtered = keys.filter( inner_test_filter );
+ 11945→                } else {
+ 11946→                                        filtered = [];
+ 11947→                    for (var i in LiteGraph.registered_node_types) {
+ 11948→                                                if( inner_test_filter(i) )
+ 11949→                                                        filtered.push(i);
+ 11950→                    }
+ 11951→                }
+ 11952→
+ 11953→                                for (var i = 0; i < filtered.length; i++) {
+ 11954→                                        addResult(filtered[i]);
+ 11955→                                        if ( LGraphCanvas.search_limit !== -1 && c++ > LGraphCanvas.search_limit ) {
+ 11956→                                                break;
+ 11957→                                        }
+ 11958→                                }
+ 11959→                
+ 11960→                // add general type if filtering
+ 11961→                if (options.show_general_after_typefiltered
+ 11962→                    && (sIn.value || sOut.value) 
+ 11963→                ){
+ 11964→                    filtered_extra = [];
+ 11965→                    for (var i in LiteGraph.registered_node_types) {
+ 11966→                                                if( inner_test_filter(i, {inTypeOverride: sIn&&sIn.value?"*":false, outTypeOverride: sOut&&sOut.value?"*":false}) )
+ 11967→                                                        filtered_extra.push(i);
+ 11968→                    }
+ 11969→                    for (var i = 0; i < filtered_extra.length; i++) {
+ 11970→                        addResult(filtered_extra[i], "generic_type");
+ 11971→                        if ( LGraphCanvas.search_limit !== -1 && c++ > LGraphCanvas.search_limit ) {
+ 11972→                            break;
+ 11973→                        }
+ 11974→                    }
+ 11975→                }
+ 11976→                
+ 11977→                // check il filtering gave no results
+ 11978→                if ((sIn.value || sOut.value) && 
+ 11979→                    ( (helper.childNodes.length == 0 && options.show_general_if_none_on_typefilter) )
+ 11980→                ){
+ 11981→                    filtered_extra = [];
+ 11982→                    for (var i in LiteGraph.registered_node_types) {
+ 11983→                                                if( inner_test_filter(i, {skipFilter: true}) )
+ 11984→                                                        filtered_extra.push(i);
+ 11985→                    }
+ 11986→                    for (var i = 0; i < filtered_extra.length; i++) {
+ 11987→                        addResult(filtered_extra[i], "not_in_filter");
+ 11988→                        if ( LGraphCanvas.search_limit !== -1 && c++ > LGraphCanvas.search_limit ) {
+ 11989→                            break;
+ 11990→                        }
+ 11991→                    }
+ 11992→                }
+ 11993→                
+ 11994→                                function inner_test_filter( type, optsIn )
+ 11995→                                {
+ 11996→                    var optsIn = optsIn || {};
+ 11997→                    var optsDef = { skipFilter: false
+ 11998→                                    ,inTypeOverride: false
+ 11999→                                    ,outTypeOverride: false
+ 12000→                                  };
+ 12001→                    var opts = Object.assign(optsDef,optsIn);
+ 12002→                                        var ctor = LiteGraph.registered_node_types[ type ];
+ 12003→                                        if(filter && ctor.filter != filter )
+ 12004→                                                return false;
+ 12005→                    if ((!options.show_all_if_empty || str) && type.toLowerCase().indexOf(str) === -1)
+ 12006→                        return false;
+ 12007→                    
+ 12008→                    // filter by slot IN, OUT types
+ 12009→                    if(options.do_type_filter && !opts.skipFilter){
+ 12010→                        var sType = type;
+ 12011→                        
+ 12012→                        var sV = sIn.value;
+ 12013→                        if (opts.inTypeOverride!==false) sV = opts.inTypeOverride;
+ 12014→                                                //if (sV.toLowerCase() == "_event_") sV = LiteGraph.EVENT; // -1
+ 12015→                        
+ 12016→                        if(sIn && sV){
+ 12017→                            //console.log("will check filter against "+sV);
+ 12018→                            if (LiteGraph.registered_slot_in_types[sV] && LiteGraph.registered_slot_in_types[sV].nodes){ // type is stored
+ 12019→                                //console.debug("check "+sType+" in "+LiteGraph.registered_slot_in_types[sV].nodes);
+ 12020→                                var doesInc = LiteGraph.registered_slot_in_types[sV].nodes.includes(sType);
+ 12021→                                if (doesInc!==false){
+ 12022→                                    //console.log(sType+" HAS "+sV);
+ 12023→                                }else{
+ 12024→                                    /*console.debug(LiteGraph.registered_slot_in_types[sV]);
+ 12025→                                    console.log(+" DONT includes "+type);*/
+ 12026→                                    return false;
+ 12027→                                }
+ 12028→                            }
+ 12029→                        }
+ 12030→                        
+ 12031→                        var sV = sOut.value;
+ 12032→                        if (opts.outTypeOverride!==false) sV = opts.outTypeOverride;
+ 12033→                        //if (sV.toLowerCase() == "_event_") sV = LiteGraph.EVENT; // -1
+ 12034→                        
+ 12035→                        if(sOut && sV){
+ 12036→                            //console.log("search will check filter against "+sV);
+ 12037→                            if (LiteGraph.registered_slot_out_types[sV] && LiteGraph.registered_slot_out_types[sV].nodes){ // type is stored
+ 12038→                                //console.debug("check "+sType+" in "+LiteGraph.registered_slot_out_types[sV].nodes);
+ 12039→                                var doesInc = LiteGraph.registered_slot_out_types[sV].nodes.includes(sType);
+ 12040→                                if (doesInc!==false){
+ 12041→                                    //console.log(sType+" HAS "+sV);
+ 12042→                                }else{
+ 12043→                                    /*console.debug(LiteGraph.registered_slot_out_types[sV]);
+ 12044→                                    console.log(+" DONT includes "+type);*/
+ 12045→                                    return false;
+ 12046→                                }
+ 12047→                            }
+ 12048→                        }
+ 12049→                    }
+ 12050→                    return true;
+ 12051→                                }
+ 12052→            }
+ 12053→
+ 12054→            function addResult(type, className) {
+ 12055→                var help = document.createElement("div");
+ 12056→                if (!first) {
+ 12057→                    first = type;
+ 12058→                }
+ 12059→                help.innerText = type;
+ 12060→                help.dataset["type"] = escape(type);
+ 12061→                help.className = "litegraph lite-search-item";
+ 12062→                if (className) {
+ 12063→                    help.className += " " + className;
+ 12064→                }
+ 12065→                help.addEventListener("click", function(e) {
+ 12066→                    select(unescape(this.dataset["type"]));
+ 12067→                });
+ 12068→                helper.appendChild(help);
+ 12069→            }
+ 12070→        }
+ 12071→
+ 12072→        return dialog;
+ 12073→    };
+ 12074→
+ 12075→    LGraphCanvas.prototype.showEditPropertyValue = function( node, property, options ) {
+ 12076→        if (!node || node.properties[property] === undefined) {
+ 12077→            return;
+ 12078→        }
+ 12079→
+ 12080→        options = options || {};
+ 12081→        var that = this;
+ 12082→
+ 12083→        var info = node.getPropertyInfo(property);
+ 12084→                var type = info.type;
+ 12085→
+ 12086→        var input_html = "";
+ 12087→
+ 12088→        if (type == "string" || type == "number" || type == "array" || type == "object") {
+ 12089→            input_html = "<input autofocus type='text' class='value'/>";
+ 12090→        } else if ( (type == "enum" || type == "combo") && info.values) {
+ 12091→            input_html = "<select autofocus type='text' class='value'>";
+ 12092→            for (var i in info.values) {
+ 12093→                var v = i;
+ 12094→                                if( info.values.constructor === Array )
+ 12095→                                        v = info.values[i];
+ 12096→
+ 12097→                input_html +=
+ 12098→                    "<option value='" +
+ 12099→                    v +
+ 12100→                    "' " +
+ 12101→                    (v == node.properties[property] ? "selected" : "") +
+ 12102→                    ">" +
+ 12103→                    info.values[i] +
+ 12104→                    "</option>";
+ 12105→            }
+ 12106→            input_html += "</select>";
+ 12107→        } else if (type == "boolean" || type == "toggle") {
+ 12108→            input_html =
+ 12109→                "<input autofocus type='checkbox' class='value' " +
+ 12110→                (node.properties[property] ? "checked" : "") +
+ 12111→                "/>";
+ 12112→        } else {
+ 12113→            console.warn("unknown type: " + type);
+ 12114→            return;
+ 12115→        }
+ 12116→
+ 12117→        var dialog = this.createDialog(
+ 12118→            "<span class='name'>" +
+ 12119→                (info.label ? info.label : property) +
+ 12120→                "</span>" +
+ 12121→                input_html +
+ 12122→                "<button>OK</button>",
+ 12123→            options
+ 12124→        );
+ 12125→
+ 12126→        var input = false;
+ 12127→        if ((type == "enum" || type == "combo") && info.values) {
+ 12128→            input = dialog.querySelector("select");
+ 12129→            input.addEventListener("change", function(e) {
+ 12130→                dialog.modified();
+ 12131→                setValue(e.target.value);
+ 12132→                //var index = e.target.value;
+ 12133→                //setValue( e.options[e.selectedIndex].value );
+ 12134→            });
+ 12135→        } else if (type == "boolean" || type == "toggle") {
+ 12136→            input = dialog.querySelector("input");
+ 12137→            if (input) {
+ 12138→                input.addEventListener("click", function(e) {
+ 12139→                    dialog.modified();
+ 12140→                    setValue(!!input.checked);
+ 12141→                });
+ 12142→            }
+ 12143→        } else {
+ 12144→            input = dialog.querySelector("input");
+ 12145→            if (input) {
+ 12146→                input.addEventListener("blur", function(e) {
+ 12147→                    this.focus();
+ 12148→                });
+ 12149→
+ 12150→                                var v = node.properties[property] !== undefined ? node.properties[property] : "";
+ 12151→                                if (type !== 'string') {
+ 12152→                    v = JSON.stringify(v);
+ 12153→                }
+ 12154→
+ 12155→                input.value = v;
+ 12156→                input.addEventListener("keydown", function(e) {
+ 12157→                    if (e.keyCode == 27) {
+ 12158→                        //ESC
+ 12159→                        dialog.close();
+ 12160→                    } else if (e.keyCode == 13) {
+ 12161→                        // ENTER
+ 12162→                        inner(); // save
+ 12163→                    } else if (e.keyCode != 13) {
+ 12164→                        dialog.modified();
+ 12165→                        return;
+ 12166→                    }
+ 12167→                    e.preventDefault();
+ 12168→                    e.stopPropagation();
+ 12169→                });
+ 12170→            }
+ 12171→        }
+ 12172→        if (input) input.focus();
+ 12173→
+ 12174→        var button = dialog.querySelector("button");
+ 12175→        button.addEventListener("click", inner);
+ 12176→
+ 12177→        function inner() {
+
+[showing lines 11578-12177 of 14425; use offset=12178 with limit to continue reading]

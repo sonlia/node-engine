@@ -1,0 +1,1182 @@
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.deserialize
+================================================================================
+LGraphNode.prototype.deserialize = function(info) {}
+
+================================================================================
+ORIGINAL: LGraph.prototype.updateExecutionOrder
+================================================================================
+LGraph.prototype.updateExecutionOrder = function() {
+        this._nodes_in_order = this.computeExecutionOrder(false);
+        this._nodes_executable = [];
+        for (var i = 0; i < this._nodes_in_order.length; ++i) {
+            if (this._nodes_in_order[i].onExecute) {
+                this._nodes_executable.push(this._nodes_in_order[i]);
+            }
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.actionDo
+================================================================================
+LGraphNode.prototype.actionDo = function(action, param, options, action_slot ) {
+        options = options || {};
+        if (this.onAction){
+            
+			// enable this to give the event an ID
+            if (!options.action_call) options.action_call = this.id+"_"+(action?action:"action")+"_"+Math.floor(Math.random()*9999);
+            
+            this.graph.nodes_actioning[this.id] = (action?action:"actioning"); //.push(this.id);
+            
+            this.onAction(action, param, options, action_slot);
+            
+            this.graph.nodes_actioning[this.id] = false; //.pop();
+            
+            // save execution/action ref
+            if(options && options.action_call){
+                this.action_call = options.action_call; // if (param)
+                this.graph.nodes_executedAction[this.id] = options.action_call;
+            }
+        }
+        this.action_triggered = 2; // the nFrames it will be used (-- each step), means "how old" is the event
+        if(this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.addConnection
+================================================================================
+LGraphNode.prototype.addConnection = function(name, type, pos, direction) {
+        var o = {
+            name: name,
+            type: type,
+            pos: pos,
+            direction: direction,
+            links: null
+        };
+        this.connections.push(o);
+        return o;
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.clearTriggeredSlot
+================================================================================
+LGraphNode.prototype.clearTriggeredSlot = function(slot, link_id) {
+        if (!this.outputs) {
+            return;
+        }
+
+        var output = this.outputs[slot];
+        if (!output) {
+            return;
+        }
+
+        var links = output.links;
+        if (!links || !links.length) {
+            return;
+        }
+
+        //for every link attached here
+        for (var k = 0; k < links.length; ++k) {
+            var id = links[k];
+            if (link_id != null && link_id != id) {
+                //to skip links
+                continue;
+            }
+            var link_info = this.graph.links[links[k]];
+            if (!link_info) {
+                //not connected
+                continue;
+            }
+            link_info._last_time = 0;
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.connectByType
+================================================================================
+LGraphNode.prototype.connectByType = function(slot, target_node, target_slotType, optsIn) {
+        var optsIn = optsIn || {};
+        var optsDef = { createEventInCase: true
+					   	,firstFreeIfOutputGeneralInCase: true
+                        ,generalTypeInCase: true
+                      };
+        var opts = Object.assign(optsDef,optsIn);
+        if (target_node && target_node.constructor === Number) {
+            target_node = this.graph.getNodeById(target_node);
+        }
+        var target_slot = target_node.findInputSlotByType(target_slotType, false, true);
+        if (target_slot >= 0 && target_slot !== null){
+            //console.debug("CONNbyTYPE type "+target_slotType+" for "+target_slot)
+            return this.connect(slot, target_node, target_slot);
+        }else{
+            //console.log("type "+target_slotType+" not found or not free?")
+            if (opts.createEventInCase && target_slotType == LiteGraph.EVENT){
+                // WILL CREATE THE onTrigger IN SLOT
+				//console.debug("connect WILL CREATE THE onTrigger "+target_slotType+" to "+target_node);
+                return this.connect(slot, target_node, -1);
+            }
+			// connect to the first general output slot if not found a specific type and 
+            if (opts.generalTypeInCase){
+                var target_slot = target_node.findInputSlotByType(0, false, true, true);
+				//console.debug("connect TO a general type (*, 0), if not found the specific type ",target_slotType," to ",target_node,"RES_SLOT:",target_slot);
+                if (target_slot >= 0){
+                    return this.connect(slot, target_node, target_slot);
+                }
+            }
+            // connect to the first free input slot if not found a specific type and this output is general
+            if (opts.firstFreeIfOutputGeneralInCase && (target_slotType == 0 || target_slotType == "*" || target_slotType == "")){
+                var target_slot = target_node.findInputSlotFree({typesNotAccepted: [LiteGraph.EVENT] });
+				//console.debug("connect TO TheFirstFREE ",target_slotType," to ",target_node,"RES_SLOT:",target_slot);
+                if (target_slot >= 0){
+					return this.connect(slot, target_node, target_slot);
+                }
+            }
+			
+			console.debug("no way to connect type: ",target_slotType," to targetNODE ",target_node);
+			//TODO filter
+			
+            return null;
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.connectByTypeOutput
+================================================================================
+LGraphNode.prototype.connectByTypeOutput = function(slot, source_node, source_slotType, optsIn) {
+        var optsIn = optsIn || {};
+        var optsDef = { createEventInCase: true
+                        ,firstFreeIfInputGeneralInCase: true
+                        ,generalTypeInCase: true
+                      };
+        var opts = Object.assign(optsDef,optsIn);
+        if (source_node && source_node.constructor === Number) {
+            source_node = this.graph.getNodeById(source_node);
+        }
+        var source_slot = source_node.findOutputSlotByType(source_slotType, false, true);
+        if (source_slot >= 0 && source_slot !== null){
+            //console.debug("CONNbyTYPE OUT! type "+source_slotType+" for "+source_slot)
+            return source_node.connect(source_slot, this, slot);
+        }else{
+            
+            // connect to the first general output slot if not found a specific type and 
+            if (opts.generalTypeInCase){
+                var source_slot = source_node.findOutputSlotByType(0, false, true, true);
+                if (source_slot >= 0){
+                    return source_node.connect(source_slot, this, slot);
+                }
+            }
+            
+            if (opts.createEventInCase && source_slotType == LiteGraph.EVENT){
+                // WILL CREATE THE onExecuted OUT SLOT
+				if (LiteGraph.do_add_triggers_slots){
+					var source_slot = source_node.addOnExecutedOutput();
+					return source_node.connect(source_slot, this, slot);
+				}
+            }
+            // connect to the first free output slot if not found a specific type and this input is general
+            if (opts.firstFreeIfInputGeneralInCase && (source_slotType == 0 || source_slotType == "*" || source_slotType == "")){
+                var source_slot = source_node.findOutputSlotFree({typesNotAccepted: [LiteGraph.EVENT] });
+                if (source_slot >= 0){
+                    return source_node.connect(source_slot, this, slot);
+                }
+            }
+            
+			console.debug("no way to connect byOUT type: ",source_slotType," to sourceNODE ",source_node);
+			//TODO filter
+			
+            //console.log("type OUT! "+source_slotType+" not found or not free?")
+            return null;
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.doExecute
+================================================================================
+LGraphNode.prototype.doExecute = function(param, options) {
+        options = options || {};
+        if (this.onExecute){
+            
+            // enable this to give the event an ID
+			if (!options.action_call) options.action_call = this.id+"_exec_"+Math.floor(Math.random()*9999);
+            
+            this.graph.nodes_executing[this.id] = true; //.push(this.id);
+
+            this.onExecute(param, options);
+            
+            this.graph.nodes_executing[this.id] = false; //.pop();
+            
+            // save execution/action ref
+            this.exec_version = this.graph.iteration;
+            if(options && options.action_call){
+                this.action_call = options.action_call; // if (param)
+                this.graph.nodes_executedAction[this.id] = options.action_call;
+            }
+        }
+        else {
+        }
+        this.execute_triggered = 2; // the nFrames it will be used (-- each step), means "how old" is the event
+        if(this.onAfterExecuteNode) this.onAfterExecuteNode(param, options); // callback
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.executeAction
+================================================================================
+LGraphNode.prototype.executeAction = function(action)
+{
+	if(action == "") return false;
+
+	if( action.indexOf(";") != -1 || action.indexOf("}
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.findInputSlot
+================================================================================
+LGraphNode.prototype.findInputSlot = function(name,  returnObj) {
+        if (!this.inputs) {
+            return -1;
+        }
+        for (var i = 0, l = this.inputs.length; i < l; ++i) {
+            if (name == this.inputs[i].name) {
+                return !returnObj ? i : this.inputs[i];
+            }
+        }
+        return -1;
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.findInputSlotByType
+================================================================================
+LGraphNode.prototype.findInputSlotByType = function(type, returnObj, preferFreeSlot, doNotUseOccupied) {
+        return this.findSlotByType(true, type, returnObj, preferFreeSlot, doNotUseOccupied);
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.findOutputSlot
+================================================================================
+LGraphNode.prototype.findOutputSlot = function(name, returnObj) {
+        returnObj = returnObj || false;
+        if (!this.outputs) {
+            return -1;
+        }
+        for (var i = 0, l = this.outputs.length; i < l; ++i) {
+            if (name == this.outputs[i].name) {
+                return !returnObj ? i : this.outputs[i];
+            }
+        }
+        return -1;
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.findOutputSlotByType
+================================================================================
+LGraphNode.prototype.findOutputSlotByType = function(type, returnObj, preferFreeSlot, doNotUseOccupied) {
+        return this.findSlotByType(false, type, returnObj, preferFreeSlot, doNotUseOccupied);
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.findSlotByType
+================================================================================
+LGraphNode.prototype.findSlotByType = function(input, type, returnObj, preferFreeSlot, doNotUseOccupied) {
+        input = input || false;
+        returnObj = returnObj || false;
+        preferFreeSlot = preferFreeSlot || false;
+        doNotUseOccupied = doNotUseOccupied || false;
+        var aSlots = input ? this.inputs : this.outputs;
+        if (!aSlots) {
+            return -1;
+        }
+		// !! empty string type is considered 0, * !!
+		if (type == "" || type == "*") type = 0; 
+        for (var i = 0, l = aSlots.length; i < l; ++i) {
+            var tFound = false;
+            var aSource = (type+"").toLowerCase().split(",");
+            var aDest = aSlots[i].type=="0"||aSlots[i].type=="*"?"0":aSlots[i].type;
+			aDest = (aDest+"").toLowerCase().split(",");
+            for(var sI=0;sI<aSource.length;sI++){
+                for(var dI=0;dI<aDest.length;dI++){
+					if (aSource[sI]=="_event_") aSource[sI] = LiteGraph.EVENT;
+					if (aDest[sI]=="_event_") aDest[sI] = LiteGraph.EVENT;
+					if (aSource[sI]=="*") aSource[sI] = 0;
+					if (aDest[sI]=="*") aDest[sI] = 0;
+					if (aSource[sI] == aDest[dI]) {
+                        if (preferFreeSlot && aSlots[i].links && aSlots[i].links !== null) continue;
+                        return !returnObj ? i : aSlots[i];
+                    }
+                }
+            }
+        }
+        // if didnt find some, stop checking for free slots
+        if (preferFreeSlot && !doNotUseOccupied){
+            for (var i = 0, l = aSlots.length; i < l; ++i) {
+                var tFound = false;
+                var aSource = (type+"").toLowerCase().split(",");
+                var aDest = aSlots[i].type=="0"||aSlots[i].type=="*"?"0":aSlots[i].type;
+				aDest = (aDest+"").toLowerCase().split(",");
+                for(var sI=0;sI<aSource.length;sI++){
+                    for(var dI=0;dI<aDest.length;dI++){
+						if (aSource[sI]=="*") aSource[sI] = 0;
+						if (aDest[sI]=="*") aDest[sI] = 0;
+                        if (aSource[sI] == aDest[dI]) {
+                            return !returnObj ? i : aSlots[i];
+                        }
+                    }
+                }
+            }
+        }
+        return -1;
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.getInputData
+================================================================================
+LGraphNode.prototype.getInputData = function(slot, force_update) {
+        if (!this.inputs) {
+            return;
+        } //undefined;
+
+        if (slot >= this.inputs.length || this.inputs[slot].link == null) {
+            return;
+        }
+
+        var link_id = this.inputs[slot].link;
+        var link = this.graph.links[link_id];
+        if (!link) {
+            //bug: weird case but it happens sometimes
+            return null;
+        }
+
+        if (!force_update) {
+            return link.data;
+        }
+
+        //special case: used to extract data from the incoming connection before the graph has been executed
+        var node = this.graph.getNodeById(link.origin_id);
+        if (!node) {
+            return link.data;
+        }
+
+        if (node.updateOutputData) {
+            node.updateOutputData(link.origin_slot);
+        } else if (node.onExecute) {
+            node.onExecute();
+        }
+
+        return link.data;
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.getInputDataByName
+================================================================================
+LGraphNode.prototype.getInputDataByName = function(
+        slot_name,
+        force_update
+    ) {
+        var slot = this.findInputSlot(slot_name);
+        if (slot == -1) {
+            return null;
+        }
+        return this.getInputData(slot, force_update);
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.isPointInside
+================================================================================
+LGraphNode.prototype.isPointInside = function(x, y, margin, skip_title) {
+        margin = margin || 0;
+
+        var margin_top = this.graph && this.graph.isLive() ? 0 : LiteGraph.NODE_TITLE_HEIGHT;
+        if (skip_title) {
+            margin_top = 0;
+        }
+        if (this.flags && this.flags.collapsed) {
+            //if ( distance([x,y], [this.pos[0] + this.size[0]*0.5, this.pos[1] + this.size[1]*0.5]) < LiteGraph.NODE_COLLAPSED_RADIUS)
+            if (
+                isInsideRectangle(
+                    x,
+                    y,
+                    this.pos[0] - margin,
+                    this.pos[1] - LiteGraph.NODE_TITLE_HEIGHT - margin,
+                    (this._collapsed_width || LiteGraph.NODE_COLLAPSED_WIDTH) +
+                        2 * margin,
+                    LiteGraph.NODE_TITLE_HEIGHT + 2 * margin
+                )
+            ) {
+                return true;
+            }
+        } else if (
+            this.pos[0] - 4 - margin < x &&
+            this.pos[0] + this.size[0] + 4 + margin > x &&
+            this.pos[1] - margin_top - margin < y &&
+            this.pos[1] + this.size[1] + margin > y
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.onAfterExecuteNode
+================================================================================
+LGraphNode.prototype.onAfterExecuteNode = function(param, options){
+        var trigS = this.findOutputSlot("onExecuted");
+        if (trigS != -1){
+            
+            //console.debug(this.id+":"+this.order+" triggering slot onAfterExecute");
+            //console.debug(param);
+            //console.debug(options);
+            this.triggerSlot(trigS, param, null, options);
+            
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.trigger
+================================================================================
+LGraphNode.prototype.trigger = function(action, param, options) {
+        if (!this.outputs || !this.outputs.length) {
+            return;
+        }
+
+        if (this.graph)
+            this.graph._last_trigger_time = LiteGraph.getTime();
+
+        for (var i = 0; i < this.outputs.length; ++i) {
+            var output = this.outputs[i];
+            if ( !output || output.type !== LiteGraph.EVENT || (action && output.name != action) )
+                continue;
+            this.triggerSlot(i, param, null, options);
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.triggerSlot
+================================================================================
+LGraphNode.prototype.triggerSlot = function(slot, param, link_id, options) {
+        options = options || {};
+        if (!this.outputs) {
+            return;
+        }
+
+		if(slot == null)
+		{
+			console.error("slot must be a number");
+			return;
+		}
+
+		if(slot.constructor !== Number)
+			console.warn("slot must be a number, use node.trigger('name') if you want to use a string");
+
+        var output = this.outputs[slot];
+        if (!output) {
+            return;
+        }
+
+        var links = output.links;
+        if (!links || !links.length) {
+            return;
+        }
+
+        if (this.graph) {
+            this.graph._last_trigger_time = LiteGraph.getTime();
+        }
+
+        //for every link attached here
+        for (var k = 0; k < links.length; ++k) {
+            var id = links[k];
+            if (link_id != null && link_id != id) {
+                //to skip links
+                continue;
+            }
+            var link_info = this.graph.links[links[k]];
+            if (!link_info) {
+                //not connected
+                continue;
+            }
+            link_info._last_time = LiteGraph.getTime();
+            var node = this.graph.getNodeById(link_info.target_id);
+            if (!node) {
+                //node not found?
+                continue;
+            }
+
+            //used to mark events in graph
+            var target_connection = node.inputs[link_info.target_slot];
+
+			if (node.mode === LiteGraph.ON_TRIGGER)
+			{
+				// generate unique trigger ID if not present
+				if (!options.action_call) options.action_call = this.id+"_trigg_"+Math.floor(Math.random()*9999);
+                if (node.onExecute) {
+                    // -- wrapping node.onExecute(param); --
+                    node.doExecute(param, options);
+                }
+			}
+			else if (node.onAction) {
+                // generate unique action ID if not present
+				if (!options.action_call) options.action_call = this.id+"_act_"+Math.floor(Math.random()*9999);
+                //pass the action name
+                var target_connection = node.inputs[link_info.target_slot];
+
+                //instead of executing them now, it will be executed in the next graph loop, to ensure data flow
+                if(LiteGraph.use_deferred_actions && node.onExecute)
+                {
+                    if(!node._waiting_actions)
+                        node._waiting_actions = [];
+                    node._waiting_actions.push([target_connection.name, param, options, link_info.target_slot]);
+                }
+                else
+                {
+                    // wrap node.onAction(target_connection.name, param);
+                    node.actionDo( target_connection.name, param, options, link_info.target_slot );
+                }
+            }
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphNode.prototype.setOutputData
+================================================================================
+LGraphNode.prototype.setOutputData = function(slot, data) {
+        if (!this.outputs) {
+            return;
+        }
+
+        //this maybe slow and a niche case
+        //if(slot && slot.constructor === String)
+        //	slot = this.findOutputSlot(slot);
+
+        if (slot == -1 || slot >= this.outputs.length) {
+            return;
+        }
+
+        var output_info = this.outputs[slot];
+        if (!output_info) {
+            return;
+        }
+
+        //store data in the output itself in case we want to debug
+        output_info._data = data;
+
+        //if there are connections, pass the data to the connections
+        if (this.outputs[slot].links) {
+            for (var i = 0; i < this.outputs[slot].links.length; i++) {
+                var link_id = this.outputs[slot].links[i];
+				var link = this.graph.links[link_id];
+				if(link)
+					link.data = data;
+            }
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphCanvas.prototype.isAreaClicked
+================================================================================
+LGraphCanvas.prototype.isAreaClicked = function( x,y,w,h, hold_click )
+	{
+		var pos = this.mouse;
+		var hover = LiteGraph.isInsideRectangle( pos[0], pos[1], x,y,w,h );
+		pos = this.last_click_position;
+		var clicked = pos && LiteGraph.isInsideRectangle( pos[0], pos[1], x,y,w,h );
+		var was_clicked = clicked && !this.block_click;
+		if(clicked && hold_click)
+			this.blockClick();
+		return was_clicked;
+	}
+
+================================================================================
+ORIGINAL: LGraphCanvas.prototype.onNodeSelectionChange
+================================================================================
+LGraphCanvas.prototype.onNodeSelectionChange = function(node) {
+        return; //disabled
+    }
+
+================================================================================
+ORIGINAL: LGraphCanvas.prototype.showShowGraphOptionsPanel
+================================================================================
+LGraphCanvas.prototype.showShowGraphOptionsPanel = function(refOpts, obEv, refMenu, refMenu2){
+        if(this.constructor && this.constructor.name == "HTMLDivElement"){
+            // assume coming from the menu event click
+            if (!obEv || !obEv.event || !obEv.event.target || !obEv.event.target.lgraphcanvas){
+                console.warn("Canvas not found"); // need a ref to canvas obj
+                /*console.debug(event);
+                console.debug(event.target);*/
+                return;
+            }
+            var graphcanvas = obEv.event.target.lgraphcanvas;
+        }else{
+            // assume called internally
+            var graphcanvas = this;
+        }
+        graphcanvas.closePanels();
+        var ref_window = graphcanvas.getCanvasWindow();
+        panel = graphcanvas.createPanel("Options",{
+                                            closable: true
+                                            ,window: ref_window
+                                            ,onOpen: function(){
+                                                graphcanvas.OPTIONPANEL_IS_OPEN = true;
+                                            }
+                                            ,onClose: function(){
+                                                graphcanvas.OPTIONPANEL_IS_OPEN = false;
+                                                graphcanvas.options_panel = null;
+                                            }
+                                        });
+        graphcanvas.options_panel = panel;
+        panel.id = "option-panel";
+		panel.classList.add("settings");
+        
+        function inner_refresh(){
+            
+            panel.content.innerHTML = ""; //clear
+
+            var fUpdate = function(name, value, options){
+                switch(name){
+                    /*case "Render mode":
+                        // Case "".. 
+                        if (options.values && options.key){
+                            var kV = Object.values(options.values).indexOf(value);
+                            if (kV>=0 && options.values[kV]){
+                                console.debug("update graph options: "+options.key+": "+kV);
+                                graphcanvas[options.key] = kV;
+                                //console.debug(graphcanvas);
+                                break;
+                            }
+                        }
+                        console.warn("unexpected options");
+                        console.debug(options);
+                        break;*/
+                    default:
+                        //console.debug("want to update graph options: "+name+": "+value);
+                        if (options && options.key){
+                            name = options.key;
+                        }
+                        if (options.values){
+                            value = Object.values(options.values).indexOf(value);
+                        }
+                        //console.debug("update graph option: "+name+": "+value);
+                        graphcanvas[name] = value;
+                        break;
+                }
+            };
+            
+            // panel.addWidget( "string", "Graph name", "", {}, fUpdate); // implement
+            
+            var aProps = LiteGraph.availableCanvasOptions;
+            aProps.sort();
+            for(var pI in aProps){
+                var pX = aProps[pI];
+                panel.addWidget( "boolean", pX, graphcanvas[pX], {key: pX, on: "True", off: "False"}, fUpdate);
+            }
+            
+            var aLinks = [ graphcanvas.links_render_mode ];
+            panel.addWidget( "combo", "Render mode", LiteGraph.LINK_RENDER_MODES[graphcanvas.links_render_mode], {key: "links_render_mode", values: LiteGraph.LINK_RENDER_MODES}, fUpdate);
+            
+            panel.addSeparator();
+            
+            panel.footer.innerHTML = ""; // clear
+
+		}
+        inner_refresh();
+
+		graphcanvas.canvas.parentNode.appendChild( panel );
+    }
+
+================================================================================
+ORIGINAL: LGraphGroup.prototype.move
+================================================================================
+LGraphGroup.prototype.move = function(deltax, deltay, ignore_nodes) {
+        this._pos[0] += deltax;
+        this._pos[1] += deltay;
+        if (ignore_nodes) {
+            return;
+        }
+        for (var i = 0; i < this._nodes.length; ++i) {
+            var node = this._nodes[i];
+            node.pos[0] += deltax;
+            node.pos[1] += deltay;
+        }
+    }
+
+================================================================================
+ORIGINAL: LGraphGroup.prototype._ctor
+================================================================================
+LGraphGroup.prototype._ctor = function(title) {
+        this.title = title || "Group";
+        this.font_size = 24;
+        this.color = LGraphCanvas.node_colors.pale_blue
+            ? LGraphCanvas.node_colors.pale_blue.groupcolor
+            : "#AAA";
+        this._bounding = new Float32Array([10, 10, 140, 80]);
+        this._pos = this._bounding.subarray(0, 2);
+        this._size = this._bounding.subarray(2, 4);
+        this._nodes = [];
+        this.graph = null;
+
+        Object.defineProperty(this, "pos", {
+            set: function(v) {
+                if (!v || v.length < 2) {
+                    return;
+                }
+                this._pos[0] = v[0];
+                this._pos[1] = v[1];
+            },
+            get: function() {
+                return this._pos;
+            },
+            enumerable: true
+        });
+
+        Object.defineProperty(this, "size", {
+            set: function(v) {
+                if (!v || v.length < 2) {
+                    return;
+                }
+                this._size[0] = Math.max(140, v[0]);
+                this._size[1] = Math.max(80, v[1]);
+            },
+            get: function() {
+                return this._size;
+            },
+            enumerable: true
+        });
+    }
+
+================================================================================
+ORIGINAL: LGraphGroup.prototype.isPointInside
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.getParameterNames
+================================================================================
+LiteGraph.getParameterNames = function(func) {
+        return (func + "")
+            .replace(/[/][/].*$/gm, "") // strip single-line comments
+            .replace(/\s+/g, "") // strip white space
+            .replace(/[/][*][^/*]*[*][/]/g, "") // strip multi-line comments  /**/
+            .split("){", 1)[0]
+            .replace(/^[^(]*[(]/, "") // extract the parameters
+            .replace(/=[^,]+/g, "") // strip any ES6 defaults
+            .split(",")
+            .filter(Boolean); // split & filter [""]
+    };
+
+	/* helper for interaction: pointer, touch, mouse Listeners
+	used by LGraphCanvas DragAndScale ContextMenu*/
+	LiteGraph.pointerListenerAdd = function(oDOM, sEvIn, fCall, capture=false) {
+		if (!oDOM || !oDOM.addEventListener || !sEvIn || typeof fCall!=="function"){
+			//console.log("cant pointerListenerAdd "+oDOM+", "+sEvent+", "+fCall);
+			return; // -- break --
+		}
+		
+		var sMethod = LiteGraph.pointerevents_method;
+		var sEvent = sEvIn;
+		
+		// UNDER CONSTRUCTION
+		// convert pointerevents to touch event when not available
+		if (sMethod=="pointer" && !window.PointerEvent){ 
+			console.warn("sMethod=='pointer' && !window.PointerEvent");
+			console.log("Converting pointer["+sEvent+"] : down move up cancel enter TO touchstart touchmove touchend, etc ..");
+			switch(sEvent){
+				case "down":{
+					sMethod = "touch";
+					sEvent = "start";
+					break;
+				}
+				case "move":{
+					sMethod = "touch";
+					//sEvent = "move";
+					break;
+				}
+				case "up":{
+					sMethod = "touch";
+					sEvent = "end";
+					break;
+				}
+				case "cancel":{
+					sMethod = "touch";
+					//sEvent = "cancel";
+					break;
+				}
+				case "enter":{
+					console.log("debug: Should I send a move event?"); // ???
+					break;
+				}
+				// case "over": case "out": not used at now
+				default:{
+					console.warn("PointerEvent not available in this browser ? The event "+sEvent+" would not be called");
+				}
+			}
+		}
+
+		switch(sEvent){
+			//both pointer and move events
+			case "down": case "up": case "move": case "over": case "out": case "enter":
+			{
+				oDOM.addEventListener(sMethod+sEvent, fCall, capture);
+			}
+			// only pointerevents
+			case "leave": case "cancel": case "gotpointercapture": case "lostpointercapture":
+			{
+				if (sMethod!="mouse"){
+					return oDOM.addEventListener(sMethod+sEvent, fCall, capture);
+				}
+			}
+			// not "pointer" || "mouse"
+			default:
+				return oDOM.addEventListener(sEvent, fCall, capture);
+		}
+	}
+	LiteGraph.pointerListenerRemove = function(oDOM, sEvent, fCall, capture=false) {
+		if (!oDOM || !oDOM.removeEventListener || !sEvent || typeof fCall!=="function"){
+			//console.log("cant pointerListenerRemove "+oDOM+", "+sEvent+", "+fCall);
+			return; // -- break --
+		}
+		switch(sEvent){
+			//both pointer and move events
+			case "down": case "up": case "move": case "over": case "out": case "enter":
+			{
+				if (LiteGraph.pointerevents_method=="pointer" || LiteGraph.pointerevents_method=="mouse"){
+					oDOM.removeEventListener(LiteGraph.pointerevents_method+sEvent, fCall, capture);
+				}
+			}
+			// only pointerevents
+			case "leave": case "cancel": case "gotpointercapture": case "lostpointercapture":
+			{
+				if (LiteGraph.pointerevents_method=="pointer"){
+					return oDOM.removeEventListener(LiteGraph.pointerevents_method+sEvent, fCall, capture);
+				}
+			}
+			// not "pointer" || "mouse"
+			default:
+				return oDOM.removeEventListener(sEvent, fCall, capture);
+		}
+	}
+
+    function clamp(v, a, b) {
+        return a > v ? a : b < v ? b : v;
+    };
+    global.clamp = clamp;
+
+    if (typeof window != "undefined" && !window["requestAnimationFrame"]) {
+        window.requestAnimationFrame =
+            window.webkitRequestAnimationFrame ||
+            window.mozRequestAnimationFrame ||
+            function(callback) {
+                window.setTimeout(callback, 1000 / 60);
+            };
+    }
+}
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.compareObjects
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function compareObjects(a, b) {
+        for (var i in a) {
+            if (a[i] != b[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.distance
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function distance(a, b) {
+        return Math.sqrt(
+            (b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1])
+        );
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.growBounding
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function growBounding(bounding, x, y) {
+        if (x < bounding[0]) {
+            bounding[0] = x;
+        } else if (x > bounding[2]) {
+            bounding[2] = x;
+        }
+
+        if (y < bounding[1]) {
+            bounding[1] = y;
+        } else if (y > bounding[3]) {
+            bounding[3] = y;
+        }
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.hex2num
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function hex2num(hex) {
+        if (hex.charAt(0) == "#") {
+            hex = hex.slice(1);
+        } //Remove the '#' char - if there is one.
+        hex = hex.toUpperCase();
+        var hex_alphabets = "0123456789ABCDEF";
+        var value = new Array(3);
+        var k = 0;
+        var int1, int2;
+        for (var i = 0; i < 6; i += 2) {
+            int1 = hex_alphabets.indexOf(hex.charAt(i));
+            int2 = hex_alphabets.indexOf(hex.charAt(i + 1));
+            value[k] = int1 * 16 + int2;
+            k++;
+        }
+        return value;
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.isInsideBounding
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function isInsideBounding(p, bb) {
+        if (
+            p[0] < bb[0][0] ||
+            p[1] < bb[0][1] ||
+            p[0] > bb[1][0] ||
+            p[1] > bb[1][1]
+        ) {
+            return false;
+        }
+        return true;
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.isInsideRectangle
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function isInsideRectangle(x, y, left, top, width, height) {
+        if (left < x && left + width > x && top < y && top + height > y) {
+            return true;
+        }
+        return false;
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.num2hex
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function num2hex(triplet) {
+        var hex_alphabets = "0123456789ABCDEF";
+        var hex = "#";
+        var int1, int2;
+        for (var i = 0; i < 3; i++) {
+            int1 = triplet[i] / 16;
+            int2 = triplet[i] % 16;
+
+            hex += hex_alphabets.charAt(int1) + hex_alphabets.charAt(int2);
+        }
+        return hex;
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.overlapBounding
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function overlapBounding(a, b) {
+        var A_end_x = a[0] + a[2];
+        var A_end_y = a[1] + a[3];
+        var B_end_x = b[0] + b[2];
+        var B_end_y = b[1] + b[3];
+
+        if (
+            a[0] > B_end_x ||
+            a[1] > B_end_y ||
+            A_end_x < b[0] ||
+            A_end_y < b[1]
+        ) {
+            return false;
+        }
+        return true;
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.colorToString
+================================================================================
+NOT FOUND AS PROTOTYPE METHOD
+function colorToString(c) {
+        return (
+            "rgba(" +
+            Math.round(c[0] * 255).toFixed() +
+            "," +
+            Math.round(c[1] * 255).toFixed() +
+            "," +
+            Math.round(c[2] * 255).toFixed() +
+            "," +
+            (c.length == 4 ? c[3].toFixed(2) : "1.0") +
+            ")"
+        );
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.closeAllContextMenus
+================================================================================
+LiteGraph.closeAllContextMenus = function(ref_window) {
+        ref_window = ref_window || window;
+
+        var elements = ref_window.document.querySelectorAll(".litecontextmenu");
+        if (!elements.length) {
+            return;
+        }
+
+        var result = [];
+        for (var i = 0; i < elements.length; i++) {
+            result.push(elements[i]);
+        }
+
+        for (var i=0; i < result.length; i++) {
+            if (result[i].close) {
+                result[i].close();
+            } else if (result[i].parentNode) {
+                result[i].parentNode.removeChild(result[i]);
+            }
+        }
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.extendClass
+================================================================================
+LiteGraph.extendClass = function(target, origin) {
+        for (var i in origin) {
+            //copy class properties
+            if (target.hasOwnProperty(i)) {
+                continue;
+            }
+            target[i] = origin[i];
+        }
+
+        if (origin.prototype) {
+            //copy prototype properties
+            for (var i in origin.prototype) {
+                //only enumerable
+                if (!origin.prototype.hasOwnProperty(i)) {
+                    continue;
+                }
+
+                if (target.prototype.hasOwnProperty(i)) {
+                    //avoid overwriting existing ones
+                    continue;
+                }
+
+                //copy getters
+                if (origin.prototype.__lookupGetter__(i)) {
+                    target.prototype.__defineGetter__(
+                        i,
+                        origin.prototype.__lookupGetter__(i)
+                    );
+                } else {
+                    target.prototype[i] = origin.prototype[i];
+                }
+
+                //and setters
+                if (origin.prototype.__lookupSetter__(i)) {
+                    target.prototype.__defineSetter__(
+                        i,
+                        origin.prototype.__lookupSetter__(i)
+                    );
+                }
+            }
+        }
+    }
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.pointerListenerAdd
+================================================================================
+LiteGraph.pointerListenerAdd = function(oDOM, sEvIn, fCall, capture=false) {
+		if (!oDOM || !oDOM.addEventListener || !sEvIn || typeof fCall!=="function"){
+			//console.log("cant pointerListenerAdd "+oDOM+", "+sEvent+", "+fCall);
+			return; // -- break --
+		}
+		
+		var sMethod = LiteGraph.pointerevents_method;
+		var sEvent = sEvIn;
+		
+		// UNDER CONSTRUCTION
+		// convert pointerevents to touch event when not available
+		if (sMethod=="pointer" && !window.PointerEvent){ 
+			console.warn("sMethod=='pointer' && !window.PointerEvent");
+			console.log("Converting pointer["+sEvent+"] : down move up cancel enter TO touchstart touchmove touchend, etc ..");
+			switch(sEvent){
+				case "down":{
+					sMethod = "touch";
+					sEvent = "start";
+					break;
+				}
+				case "move":{
+					sMethod = "touch";
+					//sEvent = "move";
+					break;
+				}
+				case "up":{
+					sMethod = "touch";
+					sEvent = "end";
+					break;
+				}
+				case "cancel":{
+					sMethod = "touch";
+					//sEvent = "cancel";
+					break;
+				}
+				case "enter":{
+					console.log("debug: Should I send a move event?"); // ???
+					break;
+				}
+				// case "over": case "out": not used at now
+				default:{
+					console.warn("PointerEvent not available in this browser ? The event "+sEvent+" would not be called");
+				}
+			}
+		}
+
+		switch(sEvent){
+			//both pointer and move events
+			case "down": case "up": case "move": case "over": case "out": case "enter":
+			{
+				oDOM.addEventListener(sMethod+sEvent, fCall, capture);
+			}
+			// only pointerevents
+			case "leave": case "cancel": case "gotpointercapture": case "lostpointercapture":
+			{
+				if (sMethod!="mouse"){
+					return oDOM.addEventListener(sMethod+sEvent, fCall, capture);
+				}
+			}
+			// not "pointer" || "mouse"
+			default:
+				return oDOM.addEventListener(sEvent, fCall, capture);
+		}
+	}
+
+================================================================================
+ORIGINAL: LiteGraph.prototype.pointerListenerRemove
+================================================================================
+LiteGraph.pointerListenerRemove = function(oDOM, sEvent, fCall, capture=false) {
+		if (!oDOM || !oDOM.removeEventListener || !sEvent || typeof fCall!=="function"){
+			//console.log("cant pointerListenerRemove "+oDOM+", "+sEvent+", "+fCall);
+			return; // -- break --
+		}
+		switch(sEvent){
+			//both pointer and move events
+			case "down": case "up": case "move": case "over": case "out": case "enter":
+			{
+				if (LiteGraph.pointerevents_method=="pointer" || LiteGraph.pointerevents_method=="mouse"){
+					oDOM.removeEventListener(LiteGraph.pointerevents_method+sEvent, fCall, capture);
+				}
+			}
+			// only pointerevents
+			case "leave": case "cancel": case "gotpointercapture": case "lostpointercapture":
+			{
+				if (LiteGraph.pointerevents_method=="pointer"){
+					return oDOM.removeEventListener(LiteGraph.pointerevents_method+sEvent, fCall, capture);
+				}
+			}
+			// not "pointer" || "mouse"
+			default:
+				return oDOM.removeEventListener(sEvent, fCall, capture);
+		}
+	}

@@ -1,0 +1,602 @@
+ 10978→    LGraphCanvas.prototype.showLinkMenu = function(link, e) {
+ 10979→        var that = this;
+ 10980→                // console.log(link);
+ 10981→                var node_left = that.graph.getNodeById( link.origin_id );
+ 10982→                var node_right = that.graph.getNodeById( link.target_id );
+ 10983→                var fromType = false;
+ 10984→                if (node_left && node_left.outputs && node_left.outputs[link.origin_slot]) fromType = node_left.outputs[link.origin_slot].type;
+ 10985→        var destType = false;
+ 10986→                if (node_right && node_right.outputs && node_right.outputs[link.target_slot]) destType = node_right.inputs[link.target_slot].type;
+ 10987→                
+ 10988→                var options = ["Add Node",null,"Delete",null];
+ 10989→                
+ 10990→                
+ 10991→        var menu = new LiteGraph.ContextMenu(options, {
+ 10992→            event: e,
+ 10993→                        title: link.data != null ? link.data.constructor.name : null,
+ 10994→            callback: inner_clicked
+ 10995→        });
+ 10996→
+ 10997→        function inner_clicked(v,options,e) {
+ 10998→            switch (v) {
+ 10999→                case "Add Node":
+ 11000→                                        LGraphCanvas.onMenuAdd(null, null, e, menu, function(node){
+ 11001→                                                // console.debug("node autoconnect");
+ 11002→                                                if(!node.inputs || !node.inputs.length || !node.outputs || !node.outputs.length){
+ 11003→                                                        return;
+ 11004→                                                }
+ 11005→                                                // leave the connection type checking inside connectByType
+ 11006→                                                if (node_left.connectByType( link.origin_slot, node, fromType )){
+ 11007→                                node.connectByType( link.target_slot, node_right, destType );
+ 11008→                            node.pos[0] -= node.size[0] * 0.5;
+ 11009→                        }
+ 11010→                                        });
+ 11011→                                        break;
+ 11012→                                        
+ 11013→                case "Delete":
+ 11014→                    that.graph.removeLink(link.id);
+ 11015→                    break;
+ 11016→                default:
+ 11017→                                        /*var nodeCreated = createDefaultNodeForSlot({   nodeFrom: node_left
+ 11018→                                                                                                                                        ,slotFrom: link.origin_slot
+ 11019→                                                                                                                                        ,nodeTo: node
+ 11020→                                                                                                                                        ,slotTo: link.target_slot
+ 11021→                                                                                                                                        ,e: e
+ 11022→                                                                                                                                        ,nodeType: "AUTO"
+ 11023→                                                                                                                                });
+ 11024→                                        if(nodeCreated) console.log("new node in beetween "+v+" created");*/
+ 11025→            }
+ 11026→        }
+ 11027→
+ 11028→        return false;
+ 11029→    };
+ 11030→    
+ 11031→        LGraphCanvas.prototype.createDefaultNodeForSlot = function(optPass) { // addNodeMenu for connection
+ 11032→        var optPass = optPass || {};
+ 11033→        var opts = Object.assign({   nodeFrom: null // input
+ 11034→                                    ,slotFrom: null // input
+ 11035→                                    ,nodeTo: null   // output
+ 11036→                                    ,slotTo: null   // output
+ 11037→                                    ,position: []       // pass the event coords
+ 11038→                                                                        ,nodeType: null // choose a nodetype to add, AUTO to set at first good
+ 11039→                                                                        ,posAdd:[0,0]   // adjust x,y
+ 11040→                                                                        ,posSizeFix:[0,0] // alpha, adjust the position x,y based on the new node size w,h
+ 11041→                                }
+ 11042→                                ,optPass
+ 11043→                            );
+ 11044→        var that = this;
+ 11045→        
+ 11046→        var isFrom = opts.nodeFrom && opts.slotFrom!==null;
+ 11047→        var isTo = !isFrom && opts.nodeTo && opts.slotTo!==null;
+ 11048→        
+ 11049→        if (!isFrom && !isTo){
+ 11050→            console.warn("No data passed to createDefaultNodeForSlot "+opts.nodeFrom+" "+opts.slotFrom+" "+opts.nodeTo+" "+opts.slotTo);
+ 11051→            return false;
+ 11052→        }
+ 11053→                if (!opts.nodeType){
+ 11054→            console.warn("No type to createDefaultNodeForSlot");
+ 11055→            return false;
+ 11056→        }
+ 11057→        
+ 11058→        var nodeX = isFrom ? opts.nodeFrom : opts.nodeTo;
+ 11059→        var slotX = isFrom ? opts.slotFrom : opts.slotTo;
+ 11060→        
+ 11061→        var iSlotConn = false;
+ 11062→        switch (typeof slotX){
+ 11063→            case "string":
+ 11064→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX,false) : nodeX.findInputSlot(slotX,false);
+ 11065→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+ 11066→            break;
+ 11067→            case "object":
+ 11068→                // ok slotX
+ 11069→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX.name) : nodeX.findInputSlot(slotX.name);
+ 11070→            break;
+ 11071→            case "number":
+ 11072→                iSlotConn = slotX;
+ 11073→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+ 11074→            break;
+ 11075→                        case "undefined":
+ 11076→            default:
+ 11077→                // bad ?
+ 11078→                //iSlotConn = 0;
+ 11079→                console.warn("Cant get slot information "+slotX);
+ 11080→                return false;
+ 11081→        }
+ 11082→        
+ 11083→                if (slotX===false || iSlotConn===false){
+ 11084→                        console.warn("createDefaultNodeForSlot bad slotX "+slotX+" "+iSlotConn);
+ 11085→                }
+ 11086→                
+ 11087→                // check for defaults nodes for this slottype
+ 11088→                var fromSlotType = slotX.type==LiteGraph.EVENT?"_event_":slotX.type;
+ 11089→                var slotTypesDefault = isFrom ? LiteGraph.slot_types_default_out : LiteGraph.slot_types_default_in;
+ 11090→                if(slotTypesDefault && slotTypesDefault[fromSlotType]){
+ 11091→                        if (slotX.link !== null) {
+ 11092→                                // is connected
+ 11093→                        }else{
+ 11094→                                // is not not connected
+ 11095→                        }
+ 11096→                        nodeNewType = false;
+ 11097→                        if(typeof slotTypesDefault[fromSlotType] == "object" || typeof slotTypesDefault[fromSlotType] == "array"){
+ 11098→                                for(var typeX in slotTypesDefault[fromSlotType]){
+ 11099→                                        if (opts.nodeType == slotTypesDefault[fromSlotType][typeX] || opts.nodeType == "AUTO"){
+ 11100→                                                nodeNewType = slotTypesDefault[fromSlotType][typeX];
+ 11101→                                                // console.log("opts.nodeType == slotTypesDefault[fromSlotType][typeX] :: "+opts.nodeType);
+ 11102→                                                break; // --------
+ 11103→                                        }
+ 11104→                                }
+ 11105→                        }else{
+ 11106→                                if (opts.nodeType == slotTypesDefault[fromSlotType] || opts.nodeType == "AUTO") nodeNewType = slotTypesDefault[fromSlotType];
+ 11107→                        }
+ 11108→                        if (nodeNewType) {
+ 11109→                                var nodeNewOpts = false;
+ 11110→                                if (typeof nodeNewType == "object" && nodeNewType.node){
+ 11111→                                        nodeNewOpts = nodeNewType;
+ 11112→                                        nodeNewType = nodeNewType.node;
+ 11113→                                }
+ 11114→                                
+ 11115→                                //that.graph.beforeChange();
+ 11116→                                
+ 11117→                                var newNode = LiteGraph.createNode(nodeNewType);
+ 11118→                                if(newNode){
+ 11119→                                        // if is object pass options
+ 11120→                                        if (nodeNewOpts){
+ 11121→                                                if (nodeNewOpts.properties) {
+ 11122→                                                        for (var i in nodeNewOpts.properties) {
+ 11123→                                                                newNode.addProperty( i, nodeNewOpts.properties[i] );
+ 11124→                                                        }
+ 11125→                                                }
+ 11126→                                                if (nodeNewOpts.inputs) {
+ 11127→                                                        newNode.inputs = [];
+ 11128→                                                        for (var i in nodeNewOpts.inputs) {
+ 11129→                                                                newNode.addOutput(
+ 11130→                                                                        nodeNewOpts.inputs[i][0],
+ 11131→                                                                        nodeNewOpts.inputs[i][1]
+ 11132→                                                                );
+ 11133→                                                        }
+ 11134→                                                }
+ 11135→                                                if (nodeNewOpts.outputs) {
+ 11136→                                                        newNode.outputs = [];
+ 11137→                                                        for (var i in nodeNewOpts.outputs) {
+ 11138→                                                                newNode.addOutput(
+ 11139→                                                                        nodeNewOpts.outputs[i][0],
+ 11140→                                                                        nodeNewOpts.outputs[i][1]
+ 11141→                                                                );
+ 11142→                                                        }
+ 11143→                                                }
+ 11144→                                                if (nodeNewOpts.title) {
+ 11145→                                                        newNode.title = nodeNewOpts.title;
+ 11146→                                                }
+ 11147→                                                if (nodeNewOpts.json) {
+ 11148→                                                        newNode.configure(nodeNewOpts.json);
+ 11149→                                                }
+ 11150→
+ 11151→                                        }
+ 11152→                                        
+ 11153→                                        // add the node
+ 11154→                                        that.graph.add(newNode);
+ 11155→                                        newNode.pos = [ opts.position[0]+opts.posAdd[0]+(opts.posSizeFix[0]?opts.posSizeFix[0]*newNode.size[0]:0)
+ 11156→                                                                        ,opts.position[1]+opts.posAdd[1]+(opts.posSizeFix[1]?opts.posSizeFix[1]*newNode.size[1]:0)]; //that.last_click_position; //[e.canvasX+30, e.canvasX+5];*/
+ 11157→                                        
+ 11158→                                        //that.graph.afterChange();
+ 11159→                                        
+ 11160→                                        // connect the two!
+ 11161→                                        if (isFrom){
+ 11162→                                                opts.nodeFrom.connectByType( iSlotConn, newNode, fromSlotType );
+ 11163→                                        }else{
+ 11164→                                                opts.nodeTo.connectByTypeOutput( iSlotConn, newNode, fromSlotType );
+ 11165→                                        }
+ 11166→                                        
+ 11167→                                        // if connecting in between
+ 11168→                                        if (isFrom && isTo){
+ 11169→                                                // TODO
+ 11170→                                        }
+ 11171→                                        
+ 11172→                                        return true;
+ 11173→                                        
+ 11174→                                }else{
+ 11175→                                        console.log("failed creating "+nodeNewType);
+ 11176→                                }
+ 11177→                        }
+ 11178→                }
+ 11179→                return false;
+ 11180→        }
+ 11181→ 
+ 11182→    LGraphCanvas.prototype.showConnectionMenu = function(optPass) { // addNodeMenu for connection
+ 11183→        var optPass = optPass || {};
+ 11184→        var opts = Object.assign({   nodeFrom: null  // input
+ 11185→                                    ,slotFrom: null // input
+ 11186→                                    ,nodeTo: null   // output
+ 11187→                                    ,slotTo: null   // output
+ 11188→                                    ,e: null
+ 11189→                                }
+ 11190→                                ,optPass
+ 11191→                            );
+ 11192→        var that = this;
+ 11193→        
+ 11194→        var isFrom = opts.nodeFrom && opts.slotFrom;
+ 11195→        var isTo = !isFrom && opts.nodeTo && opts.slotTo;
+ 11196→        
+ 11197→        if (!isFrom && !isTo){
+ 11198→            console.warn("No data passed to showConnectionMenu");
+ 11199→            return false;
+ 11200→        }
+ 11201→        
+ 11202→        var nodeX = isFrom ? opts.nodeFrom : opts.nodeTo;
+ 11203→        var slotX = isFrom ? opts.slotFrom : opts.slotTo;
+ 11204→        
+ 11205→        var iSlotConn = false;
+ 11206→        switch (typeof slotX){
+ 11207→            case "string":
+ 11208→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX,false) : nodeX.findInputSlot(slotX,false);
+ 11209→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+ 11210→            break;
+ 11211→            case "object":
+ 11212→                // ok slotX
+ 11213→                iSlotConn = isFrom ? nodeX.findOutputSlot(slotX.name) : nodeX.findInputSlot(slotX.name);
+ 11214→            break;
+ 11215→            case "number":
+ 11216→                iSlotConn = slotX;
+ 11217→                slotX = isFrom ? nodeX.outputs[slotX] : nodeX.inputs[slotX];
+ 11218→            break;
+ 11219→            default:
+ 11220→                // bad ?
+ 11221→                //iSlotConn = 0;
+ 11222→                console.warn("Cant get slot information "+slotX);
+ 11223→                return false;
+ 11224→        }
+ 11225→            
+ 11226→                var options = ["Add Node",null];
+ 11227→                
+ 11228→                if (that.allow_searchbox){
+ 11229→                        options.push("Search");
+ 11230→                        options.push(null);
+ 11231→                }
+ 11232→                
+ 11233→                // get defaults nodes for this slottype
+ 11234→                var fromSlotType = slotX.type==LiteGraph.EVENT?"_event_":slotX.type;
+ 11235→                var slotTypesDefault = isFrom ? LiteGraph.slot_types_default_out : LiteGraph.slot_types_default_in;
+ 11236→                if(slotTypesDefault && slotTypesDefault[fromSlotType]){
+ 11237→                        if(typeof slotTypesDefault[fromSlotType] == "object" || typeof slotTypesDefault[fromSlotType] == "array"){
+ 11238→                                for(var typeX in slotTypesDefault[fromSlotType]){
+ 11239→                                        options.push(slotTypesDefault[fromSlotType][typeX]);
+ 11240→                                }
+ 11241→                        }else{
+ 11242→                                options.push(slotTypesDefault[fromSlotType]);
+ 11243→                        }
+ 11244→                }
+ 11245→                
+ 11246→                // build menu
+ 11247→        var menu = new LiteGraph.ContextMenu(options, {
+ 11248→            event: opts.e,
+ 11249→                        title: (slotX && slotX.name!="" ? (slotX.name + (fromSlotType?" | ":"")) : "")+(slotX && fromSlotType ? fromSlotType : ""),
+ 11250→            callback: inner_clicked
+ 11251→        });
+ 11252→        
+ 11253→                // callback
+ 11254→        function inner_clicked(v,options,e) {
+ 11255→            //console.log("Process showConnectionMenu selection");
+ 11256→            switch (v) {
+ 11257→                case "Add Node":
+ 11258→                    LGraphCanvas.onMenuAdd(null, null, e, menu, function(node){
+ 11259→                        if (isFrom){
+ 11260→                            opts.nodeFrom.connectByType( iSlotConn, node, fromSlotType );
+ 11261→                        }else{
+ 11262→                            opts.nodeTo.connectByTypeOutput( iSlotConn, node, fromSlotType );
+ 11263→                        }
+ 11264→                    });
+ 11265→                    break;
+ 11266→                                case "Search":
+ 11267→                                        if(isFrom){
+ 11268→                                                that.showSearchBox(e,{node_from: opts.nodeFrom, slot_from: slotX, type_filter_in: fromSlotType});
+ 11269→                                        }else{
+ 11270→                                                that.showSearchBox(e,{node_to: opts.nodeTo, slot_from: slotX, type_filter_out: fromSlotType});
+ 11271→                                        }
+ 11272→                                        break;
+ 11273→                default:
+ 11274→                                        // check for defaults nodes for this slottype
+ 11275→                                        var nodeCreated = that.createDefaultNodeForSlot(Object.assign(opts,{ position: [opts.e.canvasX, opts.e.canvasY]
+ 11276→                                                                                                                                                                                ,nodeType: v
+ 11277→                                                                                                                                                                        }));
+ 11278→                                        if (nodeCreated){
+ 11279→                                                // new node created
+ 11280→                                                //console.log("node "+v+" created")
+ 11281→                                        }else{
+ 11282→                                                // failed or v is not in defaults
+ 11283→                                        }
+ 11284→                                        break;
+ 11285→            }
+ 11286→        }   
+ 11287→        
+ 11288→        return false;
+ 11289→    };
+ 11290→
+ 11291→    // TODO refactor :: this is used fot title but not for properties!
+ 11292→    LGraphCanvas.onShowPropertyEditor = function(item, options, e, menu, node) {
+ 11293→        var input_html = "";
+ 11294→        var property = item.property || "title";
+ 11295→        var value = node[property];
+ 11296→
+ 11297→        // TODO refactor :: use createDialog ?
+ 11298→        
+ 11299→        var dialog = document.createElement("div");
+ 11300→        dialog.is_modified = false;
+ 11301→        dialog.className = "graphdialog";
+ 11302→        dialog.innerHTML =
+ 11303→            "<span class='name'></span><input autofocus type='text' class='value'/><button>OK</button>";
+ 11304→        dialog.close = function() {
+ 11305→            if (dialog.parentNode) {
+ 11306→                dialog.parentNode.removeChild(dialog);
+ 11307→            }
+ 11308→        };
+ 11309→        var title = dialog.querySelector(".name");
+ 11310→        title.innerText = property;
+ 11311→        var input = dialog.querySelector(".value");
+ 11312→        if (input) {
+ 11313→            input.value = value;
+ 11314→            input.addEventListener("blur", function(e) {
+ 11315→                this.focus();
+ 11316→            });
+ 11317→            input.addEventListener("keydown", function(e) {
+ 11318→                dialog.is_modified = true;
+ 11319→                if (e.keyCode == 27) {
+ 11320→                    //ESC
+ 11321→                    dialog.close();
+ 11322→                } else if (e.keyCode == 13) {
+ 11323→                    inner(); // save
+ 11324→                } else if (e.keyCode != 13 && e.target.localName != "textarea") {
+ 11325→                    return;
+ 11326→                }
+ 11327→                e.preventDefault();
+ 11328→                e.stopPropagation();
+ 11329→            });
+ 11330→        }
+ 11331→
+ 11332→        var graphcanvas = LGraphCanvas.active_canvas;
+ 11333→        var canvas = graphcanvas.canvas;
+ 11334→
+ 11335→        var rect = canvas.getBoundingClientRect();
+ 11336→        var offsetx = -20;
+ 11337→        var offsety = -20;
+ 11338→        if (rect) {
+ 11339→            offsetx -= rect.left;
+ 11340→            offsety -= rect.top;
+ 11341→        }
+ 11342→
+ 11343→        if (event) {
+ 11344→            dialog.style.left = event.clientX + offsetx + "px";
+ 11345→            dialog.style.top = event.clientY + offsety + "px";
+ 11346→        } else {
+ 11347→            dialog.style.left = canvas.width * 0.5 + offsetx + "px";
+ 11348→            dialog.style.top = canvas.height * 0.5 + offsety + "px";
+ 11349→        }
+ 11350→
+ 11351→        var button = dialog.querySelector("button");
+ 11352→        button.addEventListener("click", inner);
+ 11353→        canvas.parentNode.appendChild(dialog);
+ 11354→
+ 11355→        if(input) input.focus();
+ 11356→        
+ 11357→        var dialogCloseTimer = null;
+ 11358→        dialog.addEventListener("mouseleave", function(e) {
+ 11359→            if(LiteGraph.dialog_close_on_mouse_leave)
+ 11360→                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+ 11361→                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+ 11362→        });
+ 11363→        dialog.addEventListener("mouseenter", function(e) {
+ 11364→            if(LiteGraph.dialog_close_on_mouse_leave)
+ 11365→                if(dialogCloseTimer) clearTimeout(dialogCloseTimer);
+ 11366→        });
+ 11367→        
+ 11368→        function inner() {
+ 11369→            if(input) setValue(input.value);
+ 11370→        }
+ 11371→
+ 11372→        function setValue(value) {
+ 11373→            if (item.type == "Number") {
+ 11374→                value = Number(value);
+ 11375→            } else if (item.type == "Boolean") {
+ 11376→                value = Boolean(value);
+ 11377→            }
+ 11378→            node[property] = value;
+ 11379→            if (dialog.parentNode) {
+ 11380→                dialog.parentNode.removeChild(dialog);
+ 11381→            }
+ 11382→            node.setDirtyCanvas(true, true);
+ 11383→        }
+ 11384→    };
+ 11385→
+ 11386→    // refactor: there are different dialogs, some uses createDialog some dont
+ 11387→    LGraphCanvas.prototype.prompt = function(title, value, callback, event, multiline) {
+ 11388→        var that = this;
+ 11389→        var input_html = "";
+ 11390→        title = title || "";
+ 11391→
+ 11392→        var dialog = document.createElement("div");
+ 11393→        dialog.is_modified = false;
+ 11394→        dialog.className = "graphdialog rounded";
+ 11395→        if(multiline)
+ 11396→                dialog.innerHTML = "<span class='name'></span> <textarea autofocus class='value'></textarea><button class='rounded'>OK</button>";
+ 11397→                else
+ 11398→                dialog.innerHTML = "<span class='name'></span> <input autofocus type='text' class='value'/><button class='rounded'>OK</button>";
+ 11399→        dialog.close = function() {
+ 11400→            that.prompt_box = null;
+ 11401→            if (dialog.parentNode) {
+ 11402→                dialog.parentNode.removeChild(dialog);
+ 11403→            }
+ 11404→        };
+ 11405→
+ 11406→        var graphcanvas = LGraphCanvas.active_canvas;
+ 11407→        var canvas = graphcanvas.canvas;
+ 11408→        canvas.parentNode.appendChild(dialog);
+ 11409→        
+ 11410→        if (this.ds.scale > 1) {
+ 11411→            dialog.style.transform = "scale(" + this.ds.scale + ")";
+ 11412→        }
+ 11413→
+ 11414→        var dialogCloseTimer = null;
+ 11415→        var prevent_timeout = false;
+ 11416→        LiteGraph.pointerListenerAdd(dialog,"leave", function(e) {
+ 11417→            if (prevent_timeout)
+ 11418→                return;
+ 11419→            if(LiteGraph.dialog_close_on_mouse_leave)
+ 11420→                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
+ 11421→                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
+ 11422→        });
+ 11423→        LiteGraph.pointerListenerAdd(dialog,"enter", function(e) {
+ 11424→            if(LiteGraph.dialog_close_on_mouse_leave)
+ 11425→                if(dialogCloseTimer) clearTimeout(dialogCloseTimer);
+ 11426→        });
+ 11427→        var selInDia = dialog.querySelectorAll("select");
+ 11428→        if (selInDia){
+ 11429→            // if filtering, check focus changed to comboboxes and prevent closing
+ 11430→            selInDia.forEach(function(selIn) {
+ 11431→                selIn.addEventListener("click", function(e) {
+ 11432→                    prevent_timeout++;
+ 11433→                });
+ 11434→                selIn.addEventListener("blur", function(e) {
+ 11435→                   prevent_timeout = 0;
+ 11436→                });
+ 11437→                selIn.addEventListener("change", function(e) {
+ 11438→                    prevent_timeout = -1;
+ 11439→                });
+ 11440→            });
+ 11441→        }
+ 11442→
+ 11443→        if (that.prompt_box) {
+ 11444→            that.prompt_box.close();
+ 11445→        }
+ 11446→        that.prompt_box = dialog;
+ 11447→
+ 11448→        var first = null;
+ 11449→        var timeout = null;
+ 11450→        var selected = null;
+ 11451→
+ 11452→        var name_element = dialog.querySelector(".name");
+ 11453→        name_element.innerText = title;
+ 11454→        var value_element = dialog.querySelector(".value");
+ 11455→        value_element.value = value;
+ 11456→
+ 11457→        var input = value_element;
+ 11458→        input.addEventListener("keydown", function(e) {
+ 11459→            dialog.is_modified = true;
+ 11460→            if (e.keyCode == 27) {
+ 11461→                //ESC
+ 11462→                dialog.close();
+ 11463→            } else if (e.keyCode == 13 && e.target.localName != "textarea") {
+ 11464→                if (callback) {
+ 11465→                    callback(this.value);
+ 11466→                }
+ 11467→                dialog.close();
+ 11468→            } else {
+ 11469→                return;
+ 11470→            }
+ 11471→            e.preventDefault();
+ 11472→            e.stopPropagation();
+ 11473→        });
+ 11474→
+ 11475→        var button = dialog.querySelector("button");
+ 11476→        button.addEventListener("click", function(e) {
+ 11477→            if (callback) {
+ 11478→                callback(input.value);
+ 11479→            }
+ 11480→            that.setDirty(true);
+ 11481→            dialog.close();
+ 11482→        });
+ 11483→
+ 11484→        var rect = canvas.getBoundingClientRect();
+ 11485→        var offsetx = -20;
+ 11486→        var offsety = -20;
+ 11487→        if (rect) {
+ 11488→            offsetx -= rect.left;
+ 11489→            offsety -= rect.top;
+ 11490→        }
+ 11491→
+ 11492→        if (event) {
+ 11493→            dialog.style.left = event.clientX + offsetx + "px";
+ 11494→            dialog.style.top = event.clientY + offsety + "px";
+ 11495→        } else {
+ 11496→            dialog.style.left = canvas.width * 0.5 + offsetx + "px";
+ 11497→            dialog.style.top = canvas.height * 0.5 + offsety + "px";
+ 11498→        }
+ 11499→
+ 11500→        setTimeout(function() {
+ 11501→            input.focus();
+ 11502→        }, 10);
+ 11503→
+ 11504→        return dialog;
+ 11505→    };
+ 11506→
+ 11507→    LGraphCanvas.search_limit = -1;
+ 11508→    LGraphCanvas.prototype.showSearchBox = function(event, options) {
+ 11509→        // proposed defaults
+ 11510→        var def_options = { slot_from: null
+ 11511→                        ,node_from: null
+ 11512→                        ,node_to: null
+ 11513→                        ,do_type_filter: LiteGraph.search_filter_enabled // TODO check for registered_slot_[in/out]_types not empty // this will be checked for functionality enabled : filter on slot type, in and out
+ 11514→                        ,type_filter_in: false                          // these are default: pass to set initially set values
+ 11515→                        ,type_filter_out: false
+ 11516→                        ,show_general_if_none_on_typefilter: true
+ 11517→                        ,show_general_after_typefiltered: true
+ 11518→                        ,hide_on_mouse_leave: LiteGraph.search_hide_on_mouse_leave
+ 11519→                        ,show_all_if_empty: true
+ 11520→                        ,show_all_on_open: LiteGraph.search_show_all_on_open
+ 11521→                    };
+ 11522→        options = Object.assign(def_options, options || {});
+ 11523→        
+ 11524→                //console.log(options);
+ 11525→                
+ 11526→        var that = this;
+ 11527→        var input_html = "";
+ 11528→        var graphcanvas = LGraphCanvas.active_canvas;
+ 11529→        var canvas = graphcanvas.canvas;
+ 11530→        var root_document = canvas.ownerDocument || document;
+ 11531→
+ 11532→        var dialog = document.createElement("div");
+ 11533→        dialog.className = "litegraph litesearchbox graphdialog rounded";
+ 11534→        dialog.innerHTML = "<span class='name'>Search</span> <input autofocus type='text' class='value rounded'/>";
+ 11535→        if (options.do_type_filter){
+ 11536→            dialog.innerHTML += "<select class='slot_in_type_filter'><option value=''></option></select>";
+ 11537→            dialog.innerHTML += "<select class='slot_out_type_filter'><option value=''></option></select>";
+ 11538→        }
+ 11539→        dialog.innerHTML += "<div class='helper'></div>";
+ 11540→        
+ 11541→        if( root_document.fullscreenElement )
+ 11542→                root_document.fullscreenElement.appendChild(dialog);
+ 11543→                else
+ 11544→                {
+ 11545→                    root_document.body.appendChild(dialog);
+ 11546→                        root_document.body.style.overflow = "hidden";
+ 11547→                }
+ 11548→        // dialog element has been appended
+ 11549→        
+ 11550→        if (options.do_type_filter){
+ 11551→            var selIn = dialog.querySelector(".slot_in_type_filter");
+ 11552→            var selOut = dialog.querySelector(".slot_out_type_filter");
+ 11553→        }
+ 11554→        
+ 11555→        dialog.close = function() {
+ 11556→            that.search_box = null;
+ 11557→                        this.blur();
+ 11558→            canvas.focus();
+ 11559→                        root_document.body.style.overflow = "";
+ 11560→
+ 11561→            setTimeout(function() {
+ 11562→                that.canvas.focus();
+ 11563→            }, 20); //important, if canvas loses focus keys wont be captured
+ 11564→            if (dialog.parentNode) {
+ 11565→                dialog.parentNode.removeChild(dialog);
+ 11566→            }
+ 11567→        };
+ 11568→
+ 11569→        if (this.ds.scale > 1) {
+ 11570→            dialog.style.transform = "scale(" + this.ds.scale + ")";
+ 11571→        }
+ 11572→
+ 11573→        // hide on mouse leave
+ 11574→        if(options.hide_on_mouse_leave){
+ 11575→            var prevent_timeout = false;
+ 11576→            var timeout_close = null;
+ 11577→            LiteGraph.pointerListenerAdd(dialog,"enter", function(e) {
+
+[showing lines 10978-11577 of 14425; use offset=11578 with limit to continue reading]

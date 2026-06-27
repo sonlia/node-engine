@@ -127,11 +127,13 @@ class LGraph {
    * @param {GraphCanvas} graphcanvas
    */
   attachCanvas(graphcanvas) {
-    if (graphcanvas.constructor !== LGraph._LGraphCanvas && !graphcanvas.graph) {
-      // LGraphCanvas may not be loaded yet; perform a basic sanity check
-      if (typeof graphcanvas.setDirty !== "function") {
-        throw "attachCanvas expects a LGraphCanvas instance";
-      }
+    // Resolve LGraphCanvas through the late-attached LiteGraph reference to
+    // avoid a direct circular import (LGraphCanvas.js imports LGraph.js).
+    // index.js sets `LiteGraph.LGraphCanvas = LGraphCanvas` after both
+    // modules finish evaluating.
+    const LGraphCanvasClass = LiteGraph.LGraphCanvas;
+    if (LGraphCanvasClass && !(graphcanvas instanceof LGraphCanvasClass)) {
+      throw "attachCanvas expects a LGraphCanvas instance";
     }
     if (graphcanvas.graph && graphcanvas.graph !== this) {
       graphcanvas.graph.detachCanvas(graphcanvas);
