@@ -301,6 +301,11 @@ export default function Home() {
     const graphCanvas = new LGraphCanvas(canvas, graph, { autoresize: true });
     graphCanvasRef.current = graphCanvas;
 
+    // Expose for debugging
+    (window as any).__graphCanvas = graphCanvas;
+    (window as any).__graph = graph;
+    (window as any).__LiteGraph = LiteGraph;
+
     // Configure canvas appearance
     graphCanvas.background_image = null;
     graphCanvas.clear_background_color = '#1a1a2e';

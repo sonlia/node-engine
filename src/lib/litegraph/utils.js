@@ -126,29 +126,29 @@ export function getParameterNames(func) {
 }
 
 /**
- * Cross-platform pointer event listener binding
+ * Cross-platform pointer event listener binding.
+ * Uses LiteGraph.pointerevents_method ("pointer" or "mouse") to construct
+ * the event name by concatenating method + event suffix.
+ * E.g., method="pointer", event="down" → "pointerdown"
+ *       method="mouse", event="down" → "mousedown"
  */
 export function pointerListenerAdd(target, event, handler, capture) {
   capture = capture || false;
-  const eventMap = {
-    "mousedown": "pointerdown",
-    "mousemove": "pointermove",
-    "mouseup": "pointerup",
-  };
-  const mappedEvent = eventMap[event] || event;
-  target.addEventListener(mappedEvent, handler, capture);
+  const method = LiteGraph.pointerevents_method || "pointer";
+  // For known suffixes (down/up/move/over/out/enter), prepend the method
+  const knownSuffixes = ["down", "up", "move", "over", "out", "enter"];
+  const finalEvent = knownSuffixes.includes(event) ? method + event : event;
+  target.addEventListener(finalEvent, handler, capture);
 }
 
 /**
- * Cross-platform pointer event listener removal
+ * Cross-platform pointer event listener removal.
+ * Must mirror pointerListenerAdd's event name construction.
  */
 export function pointerListenerRemove(target, event, handler, capture) {
   capture = capture || false;
-  const eventMap = {
-    "mousedown": "pointerdown",
-    "mousemove": "pointermove",
-    "mouseup": "pointerup",
-  };
-  const mappedEvent = eventMap[event] || event;
-  target.removeEventListener(mappedEvent, handler, capture);
+  const method = LiteGraph.pointerevents_method || "pointer";
+  const knownSuffixes = ["down", "up", "move", "over", "out", "enter"];
+  const finalEvent = knownSuffixes.includes(event) ? method + event : event;
+  target.removeEventListener(finalEvent, handler, capture);
 }

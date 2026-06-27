@@ -27,6 +27,20 @@ import {
 const temp_vec2 = new Float32Array(2);
 const tmp_area = new Float32Array(4);
 const margin_area = new Float32Array(4);
+
+/**
+ * Get the mouse button from an event.
+ * PointerEvent may not set e.which, so we fall back to e.button.
+ * Returns: 1=left, 2=middle, 3=right
+ */
+function getMouseButton(e) {
+    if (e.which !== undefined && e.which !== 0) return e.which;
+    // e.button: 0=left, 1=middle, 2=right
+    if (e.button === 0) return 1;
+    if (e.button === 1) return 2;
+    if (e.button === 2) return 3;
+    return 0;
+}
 const link_bounding = new Float32Array(4);
 const tempA = new Float32Array(2);
 const tempB = new Float32Array(2);
@@ -580,7 +594,7 @@ class LGraphCanvas {
         }
 
         // LEFT BUTTON / single finger
-        if (e.which === 1 && !this.pointer_is_double) {
+        if (getMouseButton(e) === 1 && !this.pointer_is_double) {
             if (e.ctrlKey) {
                 this.dragging_rectangle = new Float32Array(4);
                 this.dragging_rectangle[0] = e.canvasX;
@@ -928,7 +942,7 @@ class LGraphCanvas {
             ) {
                 this.dragging_canvas = true;
             }
-        } else if (e.which === 2) {
+        } else if (getMouseButton(e) === 2) {
             // MIDDLE BUTTON
             if (
                 LiteGraph.middle_click_slot_add_default_node &&
@@ -1018,7 +1032,7 @@ class LGraphCanvas {
             } else if (!skip_action && this.allow_dragcanvas) {
                 this.dragging_canvas = true;
             }
-        } else if (e.which === 3 || this.pointer_is_double) {
+        } else if (getMouseButton(e) === 3 || this.pointer_is_double) {
             // RIGHT BUTTON
             if (
                 this.allow_interaction &&
@@ -1373,7 +1387,7 @@ class LGraphCanvas {
             this.block_click = false;
         }
 
-        if (e.which === 1) {
+        if (getMouseButton(e) === 1) {
             if (this.node_widget) {
                 this.processNodeWidgets(
                     this.node_widget[0],
@@ -1610,10 +1624,10 @@ class LGraphCanvas {
                     ]);
                 }
             }
-        } else if (e.which === 2) {
+        } else if (getMouseButton(e) === 2) {
             this.dirty_canvas = true;
             this.dragging_canvas = false;
-        } else if (e.which === 3) {
+        } else if (getMouseButton(e) === 3) {
             this.dirty_canvas = true;
             this.dragging_canvas = false;
         }

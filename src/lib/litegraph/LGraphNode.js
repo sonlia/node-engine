@@ -837,21 +837,46 @@ class LGraphNode {
     return out;
   }
 
-  getBounding(out) {
+  getBounding(out, compute_outer) {
     out = out || new Float32Array(4);
-    out[0] = this.pos[0];
-    out[1] = this.pos[1];
-    out[2] = this.size[0];
-    out[3] = this.size[1];
+    const nodePos = this.pos;
+    const isCollapsed = this.flags && this.flags.collapsed;
+    const nodeSize = this.size;
+
+    let left_offset = 0;
+    let right_offset = 1;
+    let top_offset = 0;
+    let bottom_offset = 0;
+
+    if (compute_outer) {
+      left_offset = 4;
+      right_offset = 6 + left_offset;
+      top_offset = 4;
+      bottom_offset = 5 + top_offset;
+    }
+
+    out[0] = nodePos[0] - left_offset;
+    out[1] = nodePos[1] - LiteGraph.NODE_TITLE_HEIGHT - top_offset;
+    out[2] = isCollapsed
+      ? (this._collapsed_width || LiteGraph.NODE_COLLAPSED_WIDTH) + right_offset
+      : nodeSize[0] + right_offset;
+    out[3] = isCollapsed
+      ? LiteGraph.NODE_TITLE_HEIGHT + bottom_offset
+      : nodeSize[1] + LiteGraph.NODE_TITLE_HEIGHT + bottom_offset;
+
+    if (this.onBounding) {
+      this.onBounding(out);
+    }
     return out;
   }
 
   isPointInside(x, y, margin) {
     margin = margin || 0;
+    const marginTop = LiteGraph.NODE_TITLE_HEIGHT;
     return (
       x >= this.pos[0] - margin &&
       x < this.pos[0] + this.size[0] + margin &&
-      y >= this.pos[1] - margin &&
+      y >= this.pos[1] - marginTop - margin &&
       y < this.pos[1] + this.size[1] + margin
     );
   }
