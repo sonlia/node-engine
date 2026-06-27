@@ -1,0 +1,952 @@
+  1435→            }
+  1436→
+  1437→            if (!node[eventname] || node.mode != mode) {
+  1438→                continue;
+  1439→            }
+  1440→            if (params === undefined) {
+  1441→                node[eventname]();
+  1442→            } else if (params && params.constructor === Array) {
+  1443→                node[eventname].apply(node, params);
+  1444→            } else {
+  1445→                node[eventname](params);
+  1446→            }
+  1447→        }
+  1448→    };
+  1449→
+  1450→    LGraph.prototype.sendActionToCanvas = function(action, params) {
+  1451→        if (!this.list_of_graphcanvas) {
+  1452→            return;
+  1453→        }
+  1454→
+  1455→        for (var i = 0; i < this.list_of_graphcanvas.length; ++i) {
+  1456→            var c = this.list_of_graphcanvas[i];
+  1457→            if (c[action]) {
+  1458→                c[action].apply(c, params);
+  1459→            }
+  1460→        }
+  1461→    };
+  1462→
+  1463→    /**
+  1464→     * Adds a new node instance to this graph
+  1465→     * @method add
+  1466→     * @param {LGraphNode} node the instance of the node
+  1467→     */
+  1468→
+  1469→    LGraph.prototype.add = function(node, skip_compute_order) {
+  1470→        if (!node) {
+  1471→            return;
+  1472→        }
+  1473→
+  1474→        //groups
+  1475→        if (node.constructor === LGraphGroup) {
+  1476→            this._groups.push(node);
+  1477→            this.setDirtyCanvas(true);
+  1478→            this.change();
+  1479→            node.graph = this;
+  1480→            this._version++;
+  1481→            return;
+  1482→        }
+  1483→
+  1484→        //nodes
+  1485→        if (node.id != -1 && this._nodes_by_id[node.id] != null) {
+  1486→            console.warn(
+  1487→                "LiteGraph: there is already a node with this ID, changing it"
+  1488→            );
+  1489→            if (LiteGraph.use_uuids) {
+  1490→                node.id = LiteGraph.uuidv4();
+  1491→            }
+  1492→            else {
+  1493→                node.id = ++this.last_node_id;
+  1494→            }
+  1495→        }
+  1496→
+  1497→        if (this._nodes.length >= LiteGraph.MAX_NUMBER_OF_NODES) {
+  1498→            throw "LiteGraph: max number of nodes in a graph reached";
+  1499→        }
+  1500→
+  1501→        //give him an id
+  1502→        if (LiteGraph.use_uuids) {
+  1503→            if (node.id == null || node.id == -1)
+  1504→                node.id = LiteGraph.uuidv4();
+  1505→        }
+  1506→        else {
+  1507→            if (node.id == null || node.id == -1) {
+  1508→                node.id = ++this.last_node_id;
+  1509→            } else if (this.last_node_id < node.id) {
+  1510→                this.last_node_id = node.id;
+  1511→            }
+  1512→        }
+  1513→
+  1514→        node.graph = this;
+  1515→        this._version++;
+  1516→
+  1517→        this._nodes.push(node);
+  1518→        this._nodes_by_id[node.id] = node;
+  1519→
+  1520→        if (node.onAdded) {
+  1521→            node.onAdded(this);
+  1522→        }
+  1523→
+  1524→        if (this.config.align_to_grid) {
+  1525→            node.alignToGrid();
+  1526→        }
+  1527→
+  1528→        if (!skip_compute_order) {
+  1529→            this.updateExecutionOrder();
+  1530→        }
+  1531→
+  1532→        if (this.onNodeAdded) {
+  1533→            this.onNodeAdded(node);
+  1534→        }
+  1535→
+  1536→        this.setDirtyCanvas(true);
+  1537→        this.change();
+  1538→
+  1539→        return node; //to chain actions
+  1540→    };
+  1541→
+  1542→    /**
+  1543→     * Removes a node from the graph
+  1544→     * @method remove
+  1545→     * @param {LGraphNode} node the instance of the node
+  1546→     */
+  1547→
+  1548→    LGraph.prototype.remove = function(node) {
+  1549→        if (node.constructor === LiteGraph.LGraphGroup) {
+  1550→            var index = this._groups.indexOf(node);
+  1551→            if (index != -1) {
+  1552→                this._groups.splice(index, 1);
+  1553→            }
+  1554→            node.graph = null;
+  1555→            this._version++;
+  1556→            this.setDirtyCanvas(true, true);
+  1557→            this.change();
+  1558→            return;
+  1559→        }
+  1560→
+  1561→        if (this._nodes_by_id[node.id] == null) {
+  1562→            return;
+  1563→        } //not found
+  1564→
+  1565→        if (node.ignore_remove) {
+  1566→            return;
+  1567→        } //cannot be removed
+  1568→
+  1569→                this.beforeChange(); //sure? - almost sure is wrong
+  1570→
+  1571→        //disconnect inputs
+  1572→        if (node.inputs) {
+  1573→            for (var i = 0; i < node.inputs.length; i++) {
+  1574→                var slot = node.inputs[i];
+  1575→                if (slot.link != null) {
+  1576→                    node.disconnectInput(i);
+  1577→                }
+  1578→            }
+  1579→        }
+  1580→
+  1581→        //disconnect outputs
+  1582→        if (node.outputs) {
+  1583→            for (var i = 0; i < node.outputs.length; i++) {
+  1584→                var slot = node.outputs[i];
+  1585→                if (slot.links != null && slot.links.length) {
+  1586→                    node.disconnectOutput(i);
+  1587→                }
+  1588→            }
+  1589→        }
+  1590→
+  1591→        //node.id = -1; //why?
+  1592→
+  1593→        //callback
+  1594→        if (node.onRemoved) {
+  1595→            node.onRemoved();
+  1596→        }
+  1597→
+  1598→        node.graph = null;
+  1599→        this._version++;
+  1600→
+  1601→        //remove from canvas render
+  1602→        if (this.list_of_graphcanvas) {
+  1603→            for (var i = 0; i < this.list_of_graphcanvas.length; ++i) {
+  1604→                var canvas = this.list_of_graphcanvas[i];
+  1605→                if (canvas.selected_nodes[node.id]) {
+  1606→                    delete canvas.selected_nodes[node.id];
+  1607→                }
+  1608→                if (canvas.node_dragged == node) {
+  1609→                    canvas.node_dragged = null;
+  1610→                }
+  1611→            }
+  1612→        }
+  1613→
+  1614→        //remove from containers
+  1615→        var pos = this._nodes.indexOf(node);
+  1616→        if (pos != -1) {
+  1617→            this._nodes.splice(pos, 1);
+  1618→        }
+  1619→        delete this._nodes_by_id[node.id];
+  1620→
+  1621→        if (this.onNodeRemoved) {
+  1622→            this.onNodeRemoved(node);
+  1623→        }
+  1624→
+  1625→                //close panels
+  1626→                this.sendActionToCanvas("checkPanels");
+  1627→
+  1628→        this.setDirtyCanvas(true, true);
+  1629→                this.afterChange(); //sure? - almost sure is wrong
+  1630→        this.change();
+  1631→
+  1632→        this.updateExecutionOrder();
+  1633→    };
+  1634→
+  1635→    /**
+  1636→     * Returns a node by its id.
+  1637→     * @method getNodeById
+  1638→     * @param {Number} id
+  1639→     */
+  1640→
+  1641→    LGraph.prototype.getNodeById = function(id) {
+  1642→        if (id == null) {
+  1643→            return null;
+  1644→        }
+  1645→        return this._nodes_by_id[id];
+  1646→    };
+  1647→
+  1648→    /**
+  1649→     * Returns a list of nodes that matches a class
+  1650→     * @method findNodesByClass
+  1651→     * @param {Class} classObject the class itself (not an string)
+  1652→     * @return {Array} a list with all the nodes of this type
+  1653→     */
+  1654→    LGraph.prototype.findNodesByClass = function(classObject, result) {
+  1655→        result = result || [];
+  1656→        result.length = 0;
+  1657→        for (var i = 0, l = this._nodes.length; i < l; ++i) {
+  1658→            if (this._nodes[i].constructor === classObject) {
+  1659→                result.push(this._nodes[i]);
+  1660→            }
+  1661→        }
+  1662→        return result;
+  1663→    };
+  1664→
+  1665→    /**
+  1666→     * Returns a list of nodes that matches a type
+  1667→     * @method findNodesByType
+  1668→     * @param {String} type the name of the node type
+  1669→     * @return {Array} a list with all the nodes of this type
+  1670→     */
+  1671→    LGraph.prototype.findNodesByType = function(type, result) {
+  1672→        var type = type.toLowerCase();
+  1673→        result = result || [];
+  1674→        result.length = 0;
+  1675→        for (var i = 0, l = this._nodes.length; i < l; ++i) {
+  1676→            if (this._nodes[i].type.toLowerCase() == type) {
+  1677→                result.push(this._nodes[i]);
+  1678→            }
+  1679→        }
+  1680→        return result;
+  1681→    };
+  1682→
+  1683→    /**
+  1684→     * Returns the first node that matches a name in its title
+  1685→     * @method findNodeByTitle
+  1686→     * @param {String} name the name of the node to search
+  1687→     * @return {Node} the node or null
+  1688→     */
+  1689→    LGraph.prototype.findNodeByTitle = function(title) {
+  1690→        for (var i = 0, l = this._nodes.length; i < l; ++i) {
+  1691→            if (this._nodes[i].title == title) {
+  1692→                return this._nodes[i];
+  1693→            }
+  1694→        }
+  1695→        return null;
+  1696→    };
+  1697→
+  1698→    /**
+  1699→     * Returns a list of nodes that matches a name
+  1700→     * @method findNodesByTitle
+  1701→     * @param {String} name the name of the node to search
+  1702→     * @return {Array} a list with all the nodes with this name
+  1703→     */
+  1704→    LGraph.prototype.findNodesByTitle = function(title) {
+  1705→        var result = [];
+  1706→        for (var i = 0, l = this._nodes.length; i < l; ++i) {
+  1707→            if (this._nodes[i].title == title) {
+  1708→                result.push(this._nodes[i]);
+  1709→            }
+  1710→        }
+  1711→        return result;
+  1712→    };
+  1713→
+  1714→    /**
+  1715→     * Returns the top-most node in this position of the canvas
+  1716→     * @method getNodeOnPos
+  1717→     * @param {number} x the x coordinate in canvas space
+  1718→     * @param {number} y the y coordinate in canvas space
+  1719→     * @param {Array} nodes_list a list with all the nodes to search from, by default is all the nodes in the graph
+  1720→     * @return {LGraphNode} the node at this position or null
+  1721→     */
+  1722→    LGraph.prototype.getNodeOnPos = function(x, y, nodes_list, margin) {
+  1723→        nodes_list = nodes_list || this._nodes;
+  1724→                var nRet = null;
+  1725→        for (var i = nodes_list.length - 1; i >= 0; i--) {
+  1726→            var n = nodes_list[i];
+  1727→            if (n.isPointInside(x, y, margin)) {
+  1728→                // check for lesser interest nodes (TODO check for overlapping, use the top)
+  1729→                                /*if (typeof n == "LGraphGroup"){
+  1730→                                        nRet = n;
+  1731→                                }else{*/
+  1732→                                        return n;
+  1733→                                /*}*/
+  1734→            }
+  1735→        }
+  1736→        return nRet;
+  1737→    };
+  1738→
+  1739→    /**
+  1740→     * Returns the top-most group in that position
+  1741→     * @method getGroupOnPos
+  1742→     * @param {number} x the x coordinate in canvas space
+  1743→     * @param {number} y the y coordinate in canvas space
+  1744→     * @return {LGraphGroup} the group or null
+  1745→     */
+  1746→    LGraph.prototype.getGroupOnPos = function(x, y) {
+  1747→        for (var i = this._groups.length - 1; i >= 0; i--) {
+  1748→            var g = this._groups[i];
+  1749→            if (g.isPointInside(x, y, 2, true)) {
+  1750→                return g;
+  1751→            }
+  1752→        }
+  1753→        return null;
+  1754→    };
+  1755→
+  1756→    /**
+  1757→     * Checks that the node type matches the node type registered, used when replacing a nodetype by a newer version during execution
+  1758→     * this replaces the ones using the old version with the new version
+  1759→     * @method checkNodeTypes
+  1760→     */
+  1761→    LGraph.prototype.checkNodeTypes = function() {
+  1762→        var changes = false;
+  1763→        for (var i = 0; i < this._nodes.length; i++) {
+  1764→            var node = this._nodes[i];
+  1765→            var ctor = LiteGraph.registered_node_types[node.type];
+  1766→            if (node.constructor == ctor) {
+  1767→                continue;
+  1768→            }
+  1769→            console.log("node being replaced by newer version: " + node.type);
+  1770→            var newnode = LiteGraph.createNode(node.type);
+  1771→            changes = true;
+  1772→            this._nodes[i] = newnode;
+  1773→            newnode.configure(node.serialize());
+  1774→            newnode.graph = this;
+  1775→            this._nodes_by_id[newnode.id] = newnode;
+  1776→            if (node.inputs) {
+  1777→                newnode.inputs = node.inputs.concat();
+  1778→            }
+  1779→            if (node.outputs) {
+  1780→                newnode.outputs = node.outputs.concat();
+  1781→            }
+  1782→        }
+  1783→        this.updateExecutionOrder();
+  1784→    };
+  1785→
+  1786→    // ********** GLOBALS *****************
+  1787→
+  1788→    LGraph.prototype.onAction = function(action, param, options) {
+  1789→        this._input_nodes = this.findNodesByClass(
+  1790→            LiteGraph.GraphInput,
+  1791→            this._input_nodes
+  1792→        );
+  1793→        for (var i = 0; i < this._input_nodes.length; ++i) {
+  1794→            var node = this._input_nodes[i];
+  1795→            if (node.properties.name != action) {
+  1796→                continue;
+  1797→            }
+  1798→            //wrap node.onAction(action, param);
+  1799→            node.actionDo(action, param, options);
+  1800→            break;
+  1801→        }
+  1802→    };
+  1803→
+  1804→    LGraph.prototype.trigger = function(action, param) {
+  1805→        if (this.onTrigger) {
+  1806→            this.onTrigger(action, param);
+  1807→        }
+  1808→    };
+  1809→
+  1810→    /**
+  1811→     * Tell this graph it has a global graph input of this type
+  1812→     * @method addGlobalInput
+  1813→     * @param {String} name
+  1814→     * @param {String} type
+  1815→     * @param {*} value [optional]
+  1816→     */
+  1817→    LGraph.prototype.addInput = function(name, type, value) {
+  1818→        var input = this.inputs[name];
+  1819→        if (input) {
+  1820→            //already exist
+  1821→            return;
+  1822→        }
+  1823→
+  1824→                this.beforeChange();
+  1825→        this.inputs[name] = { name: name, type: type, value: value };
+  1826→        this._version++;
+  1827→                this.afterChange();
+  1828→
+  1829→        if (this.onInputAdded) {
+  1830→            this.onInputAdded(name, type);
+  1831→        }
+  1832→
+  1833→        if (this.onInputsOutputsChange) {
+  1834→            this.onInputsOutputsChange();
+  1835→        }
+  1836→    };
+  1837→
+  1838→    /**
+  1839→     * Assign a data to the global graph input
+  1840→     * @method setGlobalInputData
+  1841→     * @param {String} name
+  1842→     * @param {*} data
+  1843→     */
+  1844→    LGraph.prototype.setInputData = function(name, data) {
+  1845→        var input = this.inputs[name];
+  1846→        if (!input) {
+  1847→            return;
+  1848→        }
+  1849→        input.value = data;
+  1850→    };
+  1851→
+  1852→    /**
+  1853→     * Returns the current value of a global graph input
+  1854→     * @method getInputData
+  1855→     * @param {String} name
+  1856→     * @return {*} the data
+  1857→     */
+  1858→    LGraph.prototype.getInputData = function(name) {
+  1859→        var input = this.inputs[name];
+  1860→        if (!input) {
+  1861→            return null;
+  1862→        }
+  1863→        return input.value;
+  1864→    };
+  1865→
+  1866→    /**
+  1867→     * Changes the name of a global graph input
+  1868→     * @method renameInput
+  1869→     * @param {String} old_name
+  1870→     * @param {String} new_name
+  1871→     */
+  1872→    LGraph.prototype.renameInput = function(old_name, name) {
+  1873→        if (name == old_name) {
+  1874→            return;
+  1875→        }
+  1876→
+  1877→        if (!this.inputs[old_name]) {
+  1878→            return false;
+  1879→        }
+  1880→
+  1881→        if (this.inputs[name]) {
+  1882→            console.error("there is already one input with that name");
+  1883→            return false;
+  1884→        }
+  1885→
+  1886→        this.inputs[name] = this.inputs[old_name];
+  1887→        delete this.inputs[old_name];
+  1888→        this._version++;
+  1889→
+  1890→        if (this.onInputRenamed) {
+  1891→            this.onInputRenamed(old_name, name);
+  1892→        }
+  1893→
+  1894→        if (this.onInputsOutputsChange) {
+  1895→            this.onInputsOutputsChange();
+  1896→        }
+  1897→    };
+  1898→
+  1899→    /**
+  1900→     * Changes the type of a global graph input
+  1901→     * @method changeInputType
+  1902→     * @param {String} name
+  1903→     * @param {String} type
+  1904→     */
+  1905→    LGraph.prototype.changeInputType = function(name, type) {
+  1906→        if (!this.inputs[name]) {
+  1907→            return false;
+  1908→        }
+  1909→
+  1910→        if (
+  1911→            this.inputs[name].type &&
+  1912→            String(this.inputs[name].type).toLowerCase() ==
+  1913→                String(type).toLowerCase()
+  1914→        ) {
+  1915→            return;
+  1916→        }
+  1917→
+  1918→        this.inputs[name].type = type;
+  1919→        this._version++;
+  1920→        if (this.onInputTypeChanged) {
+  1921→            this.onInputTypeChanged(name, type);
+  1922→        }
+  1923→    };
+  1924→
+  1925→    /**
+  1926→     * Removes a global graph input
+  1927→     * @method removeInput
+  1928→     * @param {String} name
+  1929→     * @param {String} type
+  1930→     */
+  1931→    LGraph.prototype.removeInput = function(name) {
+  1932→        if (!this.inputs[name]) {
+  1933→            return false;
+  1934→        }
+  1935→
+  1936→        delete this.inputs[name];
+  1937→        this._version++;
+  1938→
+  1939→        if (this.onInputRemoved) {
+  1940→            this.onInputRemoved(name);
+  1941→        }
+  1942→
+  1943→        if (this.onInputsOutputsChange) {
+  1944→            this.onInputsOutputsChange();
+  1945→        }
+  1946→        return true;
+  1947→    };
+  1948→
+  1949→    /**
+  1950→     * Creates a global graph output
+  1951→     * @method addOutput
+  1952→     * @param {String} name
+  1953→     * @param {String} type
+  1954→     * @param {*} value
+  1955→     */
+  1956→    LGraph.prototype.addOutput = function(name, type, value) {
+  1957→        this.outputs[name] = { name: name, type: type, value: value };
+  1958→        this._version++;
+  1959→
+  1960→        if (this.onOutputAdded) {
+  1961→            this.onOutputAdded(name, type);
+  1962→        }
+  1963→
+  1964→        if (this.onInputsOutputsChange) {
+  1965→            this.onInputsOutputsChange();
+  1966→        }
+  1967→    };
+  1968→
+  1969→    /**
+  1970→     * Assign a data to the global output
+  1971→     * @method setOutputData
+  1972→     * @param {String} name
+  1973→     * @param {String} value
+  1974→     */
+  1975→    LGraph.prototype.setOutputData = function(name, value) {
+  1976→        var output = this.outputs[name];
+  1977→        if (!output) {
+  1978→            return;
+  1979→        }
+  1980→        output.value = value;
+  1981→    };
+  1982→
+  1983→    /**
+  1984→     * Returns the current value of a global graph output
+  1985→     * @method getOutputData
+  1986→     * @param {String} name
+  1987→     * @return {*} the data
+  1988→     */
+  1989→    LGraph.prototype.getOutputData = function(name) {
+  1990→        var output = this.outputs[name];
+  1991→        if (!output) {
+  1992→            return null;
+  1993→        }
+  1994→        return output.value;
+  1995→    };
+  1996→
+  1997→    /**
+  1998→     * Renames a global graph output
+  1999→     * @method renameOutput
+  2000→     * @param {String} old_name
+  2001→     * @param {String} new_name
+  2002→     */
+  2003→    LGraph.prototype.renameOutput = function(old_name, name) {
+  2004→        if (!this.outputs[old_name]) {
+  2005→            return false;
+  2006→        }
+  2007→
+  2008→        if (this.outputs[name]) {
+  2009→            console.error("there is already one output with that name");
+  2010→            return false;
+  2011→        }
+  2012→
+  2013→        this.outputs[name] = this.outputs[old_name];
+  2014→        delete this.outputs[old_name];
+  2015→        this._version++;
+  2016→
+  2017→        if (this.onOutputRenamed) {
+  2018→            this.onOutputRenamed(old_name, name);
+  2019→        }
+  2020→
+  2021→        if (this.onInputsOutputsChange) {
+  2022→            this.onInputsOutputsChange();
+  2023→        }
+  2024→    };
+  2025→
+  2026→    /**
+  2027→     * Changes the type of a global graph output
+  2028→     * @method changeOutputType
+  2029→     * @param {String} name
+  2030→     * @param {String} type
+  2031→     */
+  2032→    LGraph.prototype.changeOutputType = function(name, type) {
+  2033→        if (!this.outputs[name]) {
+  2034→            return false;
+  2035→        }
+  2036→
+  2037→        if (
+  2038→            this.outputs[name].type &&
+  2039→            String(this.outputs[name].type).toLowerCase() ==
+  2040→                String(type).toLowerCase()
+  2041→        ) {
+  2042→            return;
+  2043→        }
+  2044→
+  2045→        this.outputs[name].type = type;
+  2046→        this._version++;
+  2047→        if (this.onOutputTypeChanged) {
+  2048→            this.onOutputTypeChanged(name, type);
+  2049→        }
+  2050→    };
+  2051→
+  2052→    /**
+  2053→     * Removes a global graph output
+  2054→     * @method removeOutput
+  2055→     * @param {String} name
+  2056→     */
+  2057→    LGraph.prototype.removeOutput = function(name) {
+  2058→        if (!this.outputs[name]) {
+  2059→            return false;
+  2060→        }
+  2061→        delete this.outputs[name];
+  2062→        this._version++;
+  2063→
+  2064→        if (this.onOutputRemoved) {
+  2065→            this.onOutputRemoved(name);
+  2066→        }
+  2067→
+  2068→        if (this.onInputsOutputsChange) {
+  2069→            this.onInputsOutputsChange();
+  2070→        }
+  2071→        return true;
+  2072→    };
+  2073→
+  2074→    LGraph.prototype.triggerInput = function(name, value) {
+  2075→        var nodes = this.findNodesByTitle(name);
+  2076→        for (var i = 0; i < nodes.length; ++i) {
+  2077→            nodes[i].onTrigger(value);
+  2078→        }
+  2079→    };
+  2080→
+  2081→    LGraph.prototype.setCallback = function(name, func) {
+  2082→        var nodes = this.findNodesByTitle(name);
+  2083→        for (var i = 0; i < nodes.length; ++i) {
+  2084→            nodes[i].setTrigger(func);
+  2085→        }
+  2086→    };
+  2087→
+  2088→        //used for undo, called before any change is made to the graph
+  2089→    LGraph.prototype.beforeChange = function(info) {
+  2090→        if (this.onBeforeChange) {
+  2091→            this.onBeforeChange(this,info);
+  2092→        }
+  2093→        this.sendActionToCanvas("onBeforeChange", this);
+  2094→    };
+  2095→
+  2096→        //used to resend actions, called after any change is made to the graph
+  2097→    LGraph.prototype.afterChange = function(info) {
+  2098→        if (this.onAfterChange) {
+  2099→            this.onAfterChange(this,info);
+  2100→        }
+  2101→        this.sendActionToCanvas("onAfterChange", this);
+  2102→    };
+  2103→
+  2104→    LGraph.prototype.connectionChange = function(node, link_info) {
+  2105→        this.updateExecutionOrder();
+  2106→        if (this.onConnectionChange) {
+  2107→            this.onConnectionChange(node);
+  2108→        }
+  2109→        this._version++;
+  2110→        this.sendActionToCanvas("onConnectionChange");
+  2111→    };
+  2112→
+  2113→    /**
+  2114→     * returns if the graph is in live mode
+  2115→     * @method isLive
+  2116→     */
+  2117→
+  2118→    LGraph.prototype.isLive = function() {
+  2119→        if (!this.list_of_graphcanvas) {
+  2120→            return false;
+  2121→        }
+  2122→
+  2123→        for (var i = 0; i < this.list_of_graphcanvas.length; ++i) {
+  2124→            var c = this.list_of_graphcanvas[i];
+  2125→            if (c.live_mode) {
+  2126→                return true;
+  2127→            }
+  2128→        }
+  2129→        return false;
+  2130→    };
+  2131→
+  2132→    /**
+  2133→     * clears the triggered slot animation in all links (stop visual animation)
+  2134→     * @method clearTriggeredSlots
+  2135→     */
+  2136→    LGraph.prototype.clearTriggeredSlots = function() {
+  2137→        for (var i in this.links) {
+  2138→            var link_info = this.links[i];
+  2139→            if (!link_info) {
+  2140→                continue;
+  2141→            }
+  2142→            if (link_info._last_time) {
+  2143→                link_info._last_time = 0;
+  2144→            }
+  2145→        }
+  2146→    };
+  2147→
+  2148→    /* Called when something visually changed (not the graph!) */
+  2149→    LGraph.prototype.change = function() {
+  2150→        if (LiteGraph.debug) {
+  2151→            console.log("Graph changed");
+  2152→        }
+  2153→        this.sendActionToCanvas("setDirty", [true, true]);
+  2154→        if (this.on_change) {
+  2155→            this.on_change(this);
+  2156→        }
+  2157→    };
+  2158→
+  2159→    LGraph.prototype.setDirtyCanvas = function(fg, bg) {
+  2160→        this.sendActionToCanvas("setDirty", [fg, bg]);
+  2161→    };
+  2162→
+  2163→    /**
+  2164→     * Destroys a link
+  2165→     * @method removeLink
+  2166→     * @param {Number} link_id
+  2167→     */
+  2168→    LGraph.prototype.removeLink = function(link_id) {
+  2169→        var link = this.links[link_id];
+  2170→        if (!link) {
+  2171→            return;
+  2172→        }
+  2173→        var node = this.getNodeById(link.target_id);
+  2174→        if (node) {
+  2175→            node.disconnectInput(link.target_slot);
+  2176→        }
+  2177→    };
+  2178→
+  2179→    //save and recover app state ***************************************
+  2180→    /**
+  2181→     * Creates a Object containing all the info about this graph, it can be serialized
+  2182→     * @method serialize
+  2183→     * @return {Object} value of the node
+  2184→     */
+  2185→    LGraph.prototype.serialize = function() {
+  2186→        var nodes_info = [];
+  2187→        for (var i = 0, l = this._nodes.length; i < l; ++i) {
+  2188→            nodes_info.push(this._nodes[i].serialize());
+  2189→        }
+  2190→
+  2191→        //pack link info into a non-verbose format
+  2192→        var links = [];
+  2193→        for (var i in this.links) {
+  2194→            //links is an OBJECT
+  2195→            var link = this.links[i];
+  2196→            if (!link.serialize) {
+  2197→                //weird bug I havent solved yet
+  2198→                console.warn(
+  2199→                    "weird LLink bug, link info is not a LLink but a regular object"
+  2200→                );
+  2201→                var link2 = new LLink();
+  2202→                for (var j in link) { 
+  2203→                    link2[j] = link[j];
+  2204→                }
+  2205→                this.links[i] = link2;
+  2206→                link = link2;
+  2207→            }
+  2208→
+  2209→            links.push(link.serialize());
+  2210→        }
+  2211→
+  2212→        var groups_info = [];
+  2213→        for (var i = 0; i < this._groups.length; ++i) {
+  2214→            groups_info.push(this._groups[i].serialize());
+  2215→        }
+  2216→
+  2217→        var data = {
+  2218→            last_node_id: this.last_node_id,
+  2219→            last_link_id: this.last_link_id,
+  2220→            nodes: nodes_info,
+  2221→            links: links,
+  2222→            groups: groups_info,
+  2223→            config: this.config,
+  2224→                        extra: this.extra,
+  2225→            version: LiteGraph.VERSION
+  2226→        };
+  2227→
+  2228→                if(this.onSerialize)
+  2229→                        this.onSerialize(data);
+  2230→
+  2231→        return data;
+  2232→    };
+  2233→
+  2234→    /**
+  2235→     * Configure a graph from a JSON string
+  2236→     * @method configure
+  2237→     * @param {String} str configure a graph from a JSON string
+  2238→     * @param {Boolean} returns if there was any error parsing
+  2239→     */
+  2240→    LGraph.prototype.configure = function(data, keep_old) {
+  2241→        if (!data) {
+  2242→            return;
+  2243→        }
+  2244→
+  2245→        if (!keep_old) {
+  2246→            this.clear();
+  2247→        }
+  2248→
+  2249→        var nodes = data.nodes;
+  2250→
+  2251→        //decode links info (they are very verbose)
+  2252→        if (data.links && data.links.constructor === Array) {
+  2253→            var links = [];
+  2254→            for (var i = 0; i < data.links.length; ++i) {
+  2255→                var link_data = data.links[i];
+  2256→                                if(!link_data) //weird bug
+  2257→                                {
+  2258→                                        console.warn("serialized graph link data contains errors, skipping.");
+  2259→                                        continue;
+  2260→                                }
+  2261→                var link = new LLink();
+  2262→                link.configure(link_data);
+  2263→                links[link.id] = link;
+  2264→            }
+  2265→            data.links = links;
+  2266→        }
+  2267→
+  2268→        //copy all stored fields
+  2269→        for (var i in data) {
+  2270→                        if(i == "nodes" || i == "groups" ) //links must be accepted
+  2271→                                continue;
+  2272→            this[i] = data[i];
+  2273→        }
+  2274→
+  2275→        var error = false;
+  2276→
+  2277→        //create nodes
+  2278→        this._nodes = [];
+  2279→        if (nodes) {
+  2280→            for (var i = 0, l = nodes.length; i < l; ++i) {
+  2281→                var n_info = nodes[i]; //stored info
+  2282→                var node = LiteGraph.createNode(n_info.type, n_info.title);
+  2283→                if (!node) {
+  2284→                    if (LiteGraph.debug) {
+  2285→                        console.log(
+  2286→                            "Node not found or has errors: " + n_info.type
+  2287→                        );
+  2288→                    }
+  2289→
+  2290→                    //in case of error we create a replacement node to avoid losing info
+  2291→                    node = new LGraphNode();
+  2292→                    node.last_serialization = n_info;
+  2293→                    node.has_errors = true;
+  2294→                    error = true;
+  2295→                    //continue;
+  2296→                }
+  2297→
+  2298→                node.id = n_info.id; //id it or it will create a new id
+  2299→                this.add(node, true); //add before configure, otherwise configure cannot create links
+  2300→            }
+  2301→
+  2302→            //configure nodes afterwards so they can reach each other
+  2303→            for (var i = 0, l = nodes.length; i < l; ++i) {
+  2304→                var n_info = nodes[i];
+  2305→                var node = this.getNodeById(n_info.id);
+  2306→                if (node) {
+  2307→                    node.configure(n_info);
+  2308→                }
+  2309→            }
+  2310→        }
+  2311→
+  2312→        //groups
+  2313→        this._groups.length = 0;
+  2314→        if (data.groups) {
+  2315→            for (var i = 0; i < data.groups.length; ++i) {
+  2316→                var group = new LiteGraph.LGraphGroup();
+  2317→                group.configure(data.groups[i]);
+  2318→                this.add(group);
+  2319→            }
+  2320→        }
+  2321→
+  2322→        this.updateExecutionOrder();
+  2323→
+  2324→                this.extra = data.extra || {};
+  2325→
+  2326→                if(this.onConfigure)
+  2327→                        this.onConfigure(data);
+  2328→
+  2329→        this._version++;
+  2330→        this.setDirtyCanvas(true, true);
+  2331→        return error;
+  2332→    };
+  2333→
+  2334→    LGraph.prototype.load = function(url, callback) {
+  2335→        var that = this;
+  2336→
+  2337→                //from file
+  2338→                if(url.constructor === File || url.constructor === Blob)
+  2339→                {
+  2340→                        var reader = new FileReader();
+  2341→                        reader.addEventListener('load', function(event) {
+  2342→                                var data = JSON.parse(event.target.result);
+  2343→                                that.configure(data);
+  2344→                                if(callback)
+  2345→                                        callback();
+  2346→                        });
+  2347→                        
+  2348→                        reader.readAsText(url);
+  2349→                        return;
+  2350→                }
+  2351→
+  2352→                //is a string, then an URL
+  2353→        var req = new XMLHttpRequest();
+  2354→        req.open("GET", url, true);
+  2355→        req.send(null);
+  2356→        req.onload = function(oEvent) {
+  2357→            if (req.status !== 200) {
+  2358→                console.error("Error loading graph:", req.status, req.response);
+  2359→                return;
+  2360→            }
+  2361→            var data = JSON.parse( req.response );
+  2362→            that.configure(data);
+  2363→                        if(callback)
+  2364→                                callback();
+  2365→        };
+  2366→        req.onerror = function(err) {
+  2367→            console.error("Error loading graph:", err);
+  2368→        };
+  2369→    };
+  2370→
+  2371→    LGraph.prototype.onNodeTrace = function(node, msg, color) {
+  2372→        //TODO
+  2373→    };
+  2374→
+  2375→    //this is the class in charge of storing link information
+  2376→    function LLink(id, type, origin_id, origin_slot, target_id, target_slot) {
+  2377→        this.id = id;
+  2378→        this.type = type;
+  2379→        this.origin_id = origin_id;
+  2380→        this.origin_slot = origin_slot;
+  2381→        this.target_id = target_id;
+  2382→        this.target_slot = target_slot;
+  2383→
+  2384→        this._data = null;
+
+[showing lines 1435-2384 of 14425; use offset=2385 with limit to continue reading]
