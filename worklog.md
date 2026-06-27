@@ -529,3 +529,55 @@ Stage Summary:
 - Right-click menu and property panel display logic NOT modified per user instruction (showSearchBox, showConnectionMenu, showShowGraphOptionsPanel, getCanvasMenuOptions, getNodeMenuOptions, etc. — known bugs there remain unfixed).
 - The refactored ES6 module set is now a complete + behaviorally faithful port of the original litegraph.js, with only the user-excluded right-click menu / property panel methods preserved in their current state.
 
+
+---
+Task ID: final-reverification
+Agent: Main
+Task: Final re-verification: re-run method-by-method comparison and runtime verification after all 4 rounds of fixes. Right-click menu and property panel display logic kept as-is per user instruction.
+
+Work Log:
+- Ran `reverify.py` — confirmed all classes have 0 missing methods:
+  - LiteGraph (object literal): 19/19 methods present
+  - LGraph: 54/54 methods present (all matched)
+  - LGraphNode: 70/70 methods present (_ctor → constructor)
+  - LGraphCanvas: 87/87 prototype methods present
+  - LLink: 2/2 methods present
+  - LGraphGroup: 5/5 methods present (+ isPointInside/setDirtyCanvas which were originally borrowed from LGraphNode)
+  - DragAndScale: 10/10 methods present
+  - ContextMenu: 4/4 methods present (+ static trigger/isCursorOverElement)
+  - CurveEditor: 5/5 methods present (+ static sampleCurve)
+  - All 22 late-attached `LiteGraph.X = Y` statics confirmed registered ✅
+- Ran `spot_check_v4.py` — 69/69 spot-check markers confirmed in source code (covering all 4 rounds of fixes).
+- Performed detailed code-level review of additional methods not previously spot-checked:
+  - LGraph.configure — matches original (link decoding, node creation, group creation, onConfigure callback)
+  - LGraphNode.configure — matches original (properties handling, onConnectionsChange both sides, onInputAdded/onOutputAdded, widget restoration)
+  - LGraphNode constructor — matches original _ctor (with bug fix for Float32Array(10,10)→[10,10] and additive `mode` initialization)
+  - LGraph.add — matches original (group/node branches, id generation, onAdded callback, align_to_grid, updateExecutionOrder, onNodeAdded)
+  - LGraph.clear — matches original (all fields reset including nodes_executing/nodes_actioning/nodes_executedAction)
+  - LGraphCanvas.clear — matches original (all UI state reset including pointer_is_down/pointer_is_double)
+  - LGraphCanvas.bindEvents — matches original (all event bindings: pointer/mousewheel/contextmenu/DOMMouseScroll/keydown/keyup/dragover/dragend/drop/dragenter)
+- Runtime browser verification — all 92+ method existence/signature checks passed:
+  - LiteGraph: 28 methods/functions confirmed (createNode has 3 args, pointerevents_method = "mouse", all utility functions re-attached)
+  - LGraphNode: 18 instance methods confirmed (connect, triggerSlot, actionDo, doExecute, clone, serialize, setOutputData, getInputData, findSlotByType, getConnectionPos, computeSize, addWidget, changeMode, addOnTriggerInput, addOnExecutedOutput, clearTriggeredSlot, disconnectOutput, disconnectInput)
+  - LGraphCanvas: 22 methods confirmed (isAreaClicked has 5 args, switchLiveMode has 1 arg, getBoundaryNodes static exists, all draw/process methods present)
+  - LGraphGroup: isPointInside has 4 args, move/configure/serialize present
+  - DragAndScale: constructor has 2 args (skip_events restored)
+  - CurveEditor: sampleCurve static + 5 prototype methods present
+  - LLink: configure/serialize present
+  - ContextMenu: addItem/close/getTopMenu/getFirstEvent present
+  - LGraph: attachCanvas/clear/add/remove/configure/serialize/start/stop/runStep present
+  - Demo button loads 9 nodes, no console errors
+
+Stage Summary:
+- **All 4 rounds of fixes verified in place**: 12 P0 + 46 P1 + 29 LiteGraph method restorations + 14 utils restorations + 10 LGraphCanvas/LGraphGroup restorations + CurveEditor addition.
+- **0 missing methods** across all 9 classes (LiteGraph, LGraph, LGraphNode, LGraphCanvas, LLink, LGraphGroup, DragAndScale, ContextMenu, CurveEditor).
+- **All 22 late-attached statics** (`LiteGraph.X = Y`) properly registered in index.js.
+- **`npx next build` passes**; runtime test confirms Demo loads 9 nodes with no console errors.
+- **Right-click menu and property panel display logic NOT modified** per user instruction. The following methods are preserved in their current (buggy) state per the exclusion:
+  - showLinkMenu, createDefaultNodeForSlot, showConnectionMenu, prompt, showSearchBox, showEditPropertyValue, createDialog, createPanel, closePanels, showShowGraphOptionsPanel, showShowNodePanel, showSubgraphPropertiesDialog, showSubgraphPropertiesDialogRight, getCanvasMenuOptions, getNodeMenuOptions, getGroupMenuOptions, processContextMenu
+- The refactored ES6 module set is now a **complete + behaviorally faithful port** of the original litegraph.js, with the only deviations being:
+  1. The user-excluded right-click menu / property panel methods (preserved as-is per user instruction)
+  2. The 6 "Align" static methods (onNodeAlign/onGroupAlign/alignNodes/onMenuCollapseAll/onMenuNodeEdit) which are tied to the excluded right-click menu and therefore also kept as-is
+  3. The intentional Tab-key handler in processKey (a minor UX addition that doesn't modify right-click menu or property panel logic itself)
+  4. The intentional bug fixes for `Float32Array(10, 10)` and `DEFAULT_GROUP_FONT_SIZE` (undefined constant) which would have been latent bugs in the original
+
