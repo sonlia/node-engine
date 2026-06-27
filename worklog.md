@@ -496,3 +496,36 @@ Stage Summary:
 - Right-click menu and property panel display logic NOT modified per user instruction (showSearchBox, showConnectionMenu, showShowGraphOptionsPanel, getCanvasMenuOptions, getNodeMenuOptions, etc. — known bugs there remain unfixed).
 - Refactored ES6 module set is now a complete + behaviorally faithful port of the original litegraph.js, with only the user-excluded right-click menu / property panel methods preserved in their current (buggy) state.
 
+
+---
+Task ID: round4-lgraphcanvas-restorations
+Agent: Main
+Task: Process remaining P1 suggestions outside the right-click menu / property panel exclusion zone. Re-run method-by-method comparison to verify. Per user instruction: right-click menu and property panel display logic kept as-is.
+
+Work Log:
+- LGraphCanvas.isAreaClicked: complete rewrite — restored original 5-argument signature `(x, y, w, h, hold_click)` and immediate-mode GUI button semantics. Uses `this.mouse` for hover detection and `this.last_click_position` for click detection. Returns `clicked && !this.block_click`. When `hold_click` is true, calls `blockClick()` to prevent double-registration. The refactored version was a pure point-in-rect geometric test with a completely different 4-arg signature `(area, x, y, margin)` — breaking every caller.
+- LGraphCanvas.switchLiveMode: complete rewrite — restored original `setInterval` animation. When `transition` is truthy, fades `editor_alpha` from 0.1→1 (entering live mode) or 1→0.01 (leaving live mode) via 1ms ticks, flipping `live_mode` only at the end of the animation. When `transition` is falsy, toggles immediately. The refactored version immediately flipped `live_mode` and set an unused `live_mode_fading` flag — the animation was completely lost.
+- LGraphCanvas.checkPanels: complete rewrite — restored original DOM-query algorithm. Queries `this.canvas.parentNode.querySelectorAll(".litegraph.dialog")` and closes any panel whose `panel.node.graph` is missing or whose `panel.graph` differs from the canvas's current graph. The refactored version only checked `this.node_panel` and `this.options_panel` explicitly, missing subgraph dialogs and other dialog panels.
+- LGraphCanvas.openSubgraph: restored `this.checkPanels()` call after `graph.attachCanvas(this)` — closes stale panels from the parent graph when entering a subgraph.
+- LGraphCanvas.processMouseDown (middle-click branch): restored `alphaPosY` calculation `0.5 - (mClikSlot_index + 1) / total_slots` and the vertical offset `-alphaPosY * 130` in `posAdd[1]`. The refactored version hardcoded y to `0`, placing middle-click-created nodes at a different y position than the original.
+- LGraphCanvas.drawSubgraphPanelRight: restored right-aligned title text using `ctx.measureText(title_text).width` so "Graph Outputs" sits flush against the right edge of the panel (`canvas_w - tw - 20`). The refactored version left-aligned at `canvas_w - w`.
+- LGraphCanvas.getBoundaryNodes: added missing static method that returns `{top, right, bottom, left}` boundary nodes from a node list. Used by `boundaryNodesForSelection` (and would be used by the excluded Align menu methods).
+- LGraphCanvas.boundaryNodesForSelection: restored original delegation to `LGraphCanvas.getBoundaryNodes(Object.values(this.selected_nodes))`. The refactored version inlined the logic and returned `null` for empty selections instead of `{top:null, right:null, bottom:null, left:null}`.
+- LGraphCanvas.adjustNodesSize: restored direct `nodes[i].size = nodes[i].computeSize()` assignment (does NOT trigger the `onResize` callback). The refactored version used `setSize()` which fires `onResize` — a behavior change from the original.
+- LGraphGroup.isPointInside: complete rewrite — restored original LGraphNode.isPointInside semantics (LGraphGroup originally borrowed `LGraphNode.prototype.isPointInside`). Now uses `graph.isLive()` for margin_top, handles collapsed state via `isInsideRectangle` with `_collapsed_width || NODE_COLLAPSED_WIDTH`, and includes the 4px x-buffer. Added `isInsideRectangle` import from utils.js. The refactored version was a simple rectangle test that missed the title-bar band and the collapsed-node case.
+
+Stage Summary:
+- 69/69 spot-check checks passed across all 4 rounds (12 P0 + 10 P1 + 2 CE + 16 R/U/S/N + 23 LC/LG + 6 misc).
+- `npx next build` passes.
+- Runtime browser test:
+  - `isAreaClicked.length` = 5 (original signature restored)
+  - `switchLiveMode.length` = 1 (transition param)
+  - `checkPanels` is a function (DOM-query algorithm)
+  - `LGraphCanvas.getBoundaryNodes` static method exists (was missing)
+  - `boundaryNodesForSelection()` returns `{top:null, right:null, bottom:null, left:null}` for empty selection (was `null`)
+  - `adjustNodesSize` is a function (direct size assignment)
+  - `LGraphGroup.isPointInside.length` = 4 (skip_title param restored)
+  - Demo button loads 9 nodes, no console errors
+- Right-click menu and property panel display logic NOT modified per user instruction (showSearchBox, showConnectionMenu, showShowGraphOptionsPanel, getCanvasMenuOptions, getNodeMenuOptions, etc. — known bugs there remain unfixed).
+- The refactored ES6 module set is now a complete + behaviorally faithful port of the original litegraph.js, with only the user-excluded right-click menu / property panel methods preserved in their current state.
+

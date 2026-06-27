@@ -6,6 +6,7 @@
  */
 
 import { LiteGraph } from "./LiteGraph.js";
+import { isInsideRectangle } from "./utils.js";
 
 class LGraphGroup {
   constructor(title) {
@@ -120,14 +121,43 @@ class LGraphGroup {
     }
   }
 
-  isPointInside(x, y, margin) {
+  /**
+   * Returns true if the point (x, y) is inside this group.
+   * Restored original: borrows the LGraphNode.isPointInside semantics —
+   * uses graph.isLive() to determine margin_top, handles collapsed state
+   * (using _collapsed_width || NODE_COLLAPSED_WIDTH), and includes the
+   * 4px x-buffer. The refactored version was a simpler rectangle test
+   * that missed the title-bar band and the collapsed-node case.
+   */
+  isPointInside(x, y, margin, skip_title) {
     margin = margin || 0;
-    return (
-      x >= this._pos[0] - margin &&
-      x < this._pos[0] + this._size[0] + margin &&
-      y >= this._pos[1] - margin &&
-      y < this._pos[1] + this._size[1] + margin
-    );
+    let margin_top =
+      this.graph && this.graph.isLive() ? 0 : LiteGraph.NODE_TITLE_HEIGHT;
+    if (skip_title) margin_top = 0;
+
+    if (this.flags && this.flags.collapsed) {
+      if (
+        isInsideRectangle(
+          x,
+          y,
+          this.pos[0] - margin,
+          this.pos[1] - LiteGraph.NODE_TITLE_HEIGHT - margin,
+          (this._collapsed_width || LiteGraph.NODE_COLLAPSED_WIDTH) +
+            2 * margin,
+          LiteGraph.NODE_TITLE_HEIGHT + 2 * margin
+        )
+      ) {
+        return true;
+      }
+    } else if (
+      this.pos[0] - 4 - margin < x &&
+      this.pos[0] + this.size[0] + 4 + margin > x &&
+      this.pos[1] - margin_top - margin < y &&
+      this.pos[1] + this.size[1] + margin > y
+    ) {
+      return true;
+    }
+    return false;
   }
 
   setDirtyCanvas(fg, bg) {

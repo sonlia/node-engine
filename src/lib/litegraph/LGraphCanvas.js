@@ -283,6 +283,9 @@ class LGraphCanvas {
         }
 
         graph.attachCanvas(this);
+        // Restore original: close stale panels from the previous graph so
+        // they don't linger on top of the new subgraph view.
+        this.checkPanels();
         this.setDirty(true, true);
     }
 
@@ -1010,6 +1013,15 @@ class LGraphCanvas {
                         }
                     }
                     if (mClikSlot && mClikSlot_index !== false) {
+                        // Restore original: compute alphaPosY based on slot
+                        // index so the new node is vertically offset relative
+                        // to the clicked slot's position within the node.
+                        const alphaPosY =
+                            0.5 -
+                            (mClikSlot_index + 1) /
+                                (mClikSlot_isOut
+                                    ? node.outputs.length
+                                    : node.inputs.length);
                         const node_bounding = node.getBounding();
                         const posRef = [
                             !mClikSlot_isOut
@@ -1024,7 +1036,7 @@ class LGraphCanvas {
                             slotTo: !mClikSlot_isOut ? mClikSlot_index : null,
                             position: posRef,
                             nodeType: "AUTO",
-                            posAdd: [!mClikSlot_isOut ? -30 : 30, 0],
+                            posAdd: [!mClikSlot_isOut ? -30 : 30, -alphaPosY * 130],
                             posSizeFix: [!mClikSlot_isOut ? -1 : 0, 0],
                         });
                     }
@@ -4810,7 +4822,10 @@ class LGraphCanvas {
         ctx.font = "14px Arial";
         ctx.textAlign = "left";
         const title_text = "Graph Outputs";
-        ctx.fillText(title_text, canvas_w - w, 34);
+        // Restore original: right-align the title text using measureText
+        // so it sits flush against the right edge of the panel.
+        const tw = ctx.measureText(title_text).width;
+        ctx.fillText(title_text, canvas_w - tw - 20, 34);
 
         if (this.drawButton(canvas_w - w, 20, 20, 20, "X", "#151515")) {
             this.closeSubgraph();
@@ -5896,6 +5911,41 @@ class LGraphCanvas {
         const group = new LGraphGroup();
         group.pos = canvas.convertEventToCanvasOffset(mouseEvent);
         canvas.graph.add(group);
+    }
+
+    /**
+     * Returns the boundary nodes (top/right/bottom/left) of a given set
+     * of nodes. Used by boundaryNodesForSelection and the Align menu actions.
+     * Restored original static helper that was missing from the refactored
+     * class. Returns { top, right, bottom, left } — each value is the node
+     * furthest in that direction, or null if the input list is empty.
+     */
+    static getBoundaryNodes(nodes) {
+        let top = null;
+        let right = null;
+        let bottom = null;
+        let left = null;
+        for (const nID in nodes) {
+            const node = nodes[nID];
+            const x = node.pos[0];
+            const y = node.pos[1];
+            const width = node.size[0];
+            const height = node.size[1];
+
+            if (top === null || y < top.pos[1]) {
+                top = node;
+            }
+            if (right === null || x + width > right.pos[0] + right.size[0]) {
+                right = node;
+            }
+            if (bottom === null || y + height > bottom.pos[1] + bottom.size[1]) {
+                bottom = node;
+            }
+            if (left === null || x < left.pos[0]) {
+                left = node;
+            }
+        }
+        return { top, right, bottom, left };
     }
 
     // ---------------------------------------------------------------------------
@@ -7433,23 +7483,41 @@ class LGraphCanvas {
 
     /**
      * Toggle live mode on/off. In live mode the graph cannot be edited.
+     * Restored original: when `transition` is truthy, animates editor_alpha
+     * via setInterval (1ms tick) fading from 0.1→1 or 1→0.01. Without
+     * transition, toggles immediately.
      */
-    switchLiveMode(animate) {
+    switchLiveMode(transition) {
+        if (!transition) {
+            this.live_mode = !this.live_mode;
+            this.dirty_canvas = true;
+            this.dirty_bgcanvas = true;
+            return;
+        }
+
+        const self = this;
+        const delta = this.live_mode ? 1.1 : 0.9;
         if (this.live_mode) {
             this.live_mode = false;
-            if (animate) {
-                this.live_mode_fading = 1;
-            }
-            this.dirty_canvas = true;
-            this.dirty_bgcanvas = true;
-        } else {
-            this.live_mode = true;
-            if (animate) {
-                this.live_mode_fading = -1;
-            }
-            this.dirty_canvas = true;
-            this.dirty_bgcanvas = true;
+            this.editor_alpha = 0.1;
         }
+
+        const t = setInterval(function () {
+            self.editor_alpha *= delta;
+            self.dirty_canvas = true;
+            self.dirty_bgcanvas = true;
+
+            if (delta < 1 && self.editor_alpha < 0.01) {
+                clearInterval(t);
+                if (delta < 1) {
+                    self.live_mode = true;
+                }
+            }
+            if (delta > 1 && self.editor_alpha > 0.99) {
+                clearInterval(t);
+                self.editor_alpha = 1;
+            }
+        }, 1);
     }
 
     /**
@@ -7537,79 +7605,67 @@ class LGraphCanvas {
 
     /**
      * Auto-size all nodes to fit their content.
+     * Restored original: uses direct `size =` assignment (does NOT trigger
+     * the onResize callback). The refactored version used setSize() which
+     * fires onResize — a behavior change from the original.
      */
     adjustNodesSize() {
-        if (!this.graph) return;
         const nodes = this.graph._nodes;
         for (let i = 0; i < nodes.length; ++i) {
-            nodes[i].setSize(nodes[i].computeSize());
+            nodes[i].size = nodes[i].computeSize();
         }
         this.setDirty(true, true);
     }
 
     /**
      * Find the boundary nodes (topmost, bottommost, leftmost, rightmost)
-     * of the current selection. Returns [top, bottom, left, right] node array.
+     * of the current selection. Delegates to the static getBoundaryNodes
+     * helper — matches the original implementation.
      */
     boundaryNodesForSelection() {
-        const nodes = this.selected_nodes;
-        if (!nodes) return null;
-        const ids = Object.keys(nodes);
-        if (ids.length === 0) return null;
-
-        let top = null,
-            bottom = null,
-            left = null,
-            right = null;
-
-        for (const id of ids) {
-            const node = nodes[id];
-            const pos = node.pos;
-            const size = node.size;
-            if (!top || pos[1] < top.pos[1]) top = node;
-            if (!bottom || pos[1] + size[1] > bottom.pos[1] + bottom.size[1]) bottom = node;
-            if (!left || pos[0] < left.pos[0]) left = node;
-            if (!right || pos[0] + size[0] > right.pos[0] + right.size[0]) right = node;
-        }
-        return { top, bottom, left, right };
+        return LGraphCanvas.getBoundaryNodes(
+            Object.values(this.selected_nodes)
+        );
     }
 
     /**
      * Check/validate open panel state — close stale panels if needed.
+     * Restored original: queries the DOM for ALL `.litegraph.dialog` panels
+     * and closes any whose panel.node.graph is missing or whose panel.graph
+     * differs from the canvas's current graph. This catches node panels,
+     * subgraph dialogs, etc. uniformly (the refactored version only checked
+     * this.node_panel and this.options_panel explicitly).
      */
     checkPanels() {
-        if (this.node_panel) {
-            const selected = this.selected_nodes && Object.keys(this.selected_nodes).length === 1
-                ? this.selected_nodes[Object.keys(this.selected_nodes)[0]]
-                : null;
-            if (!selected || selected !== this.node_panel.node) {
-                this.node_panel.close();
-                this.node_panel = null;
-            }
-        }
-        if (this.options_panel) {
-            const selected = this.selected_nodes && Object.keys(this.selected_nodes).length === 1
-                ? this.selected_nodes[Object.keys(this.selected_nodes)[0]]
-                : null;
-            if (!selected || selected !== this.options_panel.node) {
-                this.options_panel.close();
-                this.options_panel = null;
+        if (!this.canvas) return;
+        const panels = this.canvas.parentNode.querySelectorAll(".litegraph.dialog");
+        for (let i = 0; i < panels.length; ++i) {
+            const panel = panels[i];
+            if (!panel.node) continue;
+            if (!panel.node.graph || panel.graph !== this.graph) {
+                panel.close();
             }
         }
     }
 
     /**
-     * Hit-test a rectangular area on the canvas. Used for buttons and UI elements.
-     * Returns true if the point is inside the given area.
+     * Hit-test a rectangular area on the canvas. Used for immediate-mode GUI
+     * buttons. Returns true if the area was clicked (not just hovered).
+     * Restored original 5-argument signature: (x, y, w, h, hold_click).
+     * Checks both current mouse position (hover) and last click position
+     * (clicked). When hold_click is true, calls blockClick() to prevent
+     * the same click from registering twice.
      */
-    isAreaClicked(area, x, y, margin) {
-        margin = margin || 0;
-        return (
-            x >= area[0] - margin &&
-            x <= area[0] + area[2] + margin &&
-            y >= area[1] - margin &&
-            y <= area[1] + area[3] + margin
-        );
+    isAreaClicked(x, y, w, h, hold_click) {
+        const pos = this.mouse;
+        const hover = LiteGraph.isInsideRectangle(pos[0], pos[1], x, y, w, h);
+        const clickPos = this.last_click_position;
+        const clicked = clickPos && LiteGraph.isInsideRectangle(clickPos[0], clickPos[1], x, y, w, h);
+        const was_clicked = clicked && !this.block_click;
+        if (clicked && hold_click) {
+            this.blockClick();
+        }
+        return was_clicked;
     }
 
     /**
