@@ -33,6 +33,9 @@ class LGraphNode {
     this.properties_info = [];
     this.flags = {};
 
+    // Execution mode: 0=ALWAYS, 1=ON_EVENT, 2=NEVER, 3=ON_TRIGGER
+    this.mode = LiteGraph.ALWAYS;
+
     // Rendering/execution state
     this._shape = null;
     this._waiting_actions = [];
@@ -271,7 +274,18 @@ class LGraphNode {
   setOutputData(slot, data) {
     if (!this.outputs) return;
     if (slot >= 0 && slot < this.outputs.length) {
-      this.outputs[slot]._data = data;
+      const output = this.outputs[slot];
+      output._data = data;
+      // Propagate data to all connected links so that
+      // downstream nodes can read it via getInputData → link._data
+      if (output.links && this.graph) {
+        for (let i = 0; i < output.links.length; i++) {
+          const link = this.graph.links[output.links[i]];
+          if (link) {
+            link._data = data;
+          }
+        }
+      }
     }
   }
 
