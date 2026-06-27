@@ -1862,18 +1862,40 @@ class LGraphNode {
     }
   }
 
+  /**
+   * Preload an image. Restored original: tracks `img.ready = false` until
+   * the load event fires, then sets it true and calls setDirtyCanvas(true)
+   * so the canvas redraws with the loaded image.
+   */
   loadImage(url) {
     const img = new Image();
     img.src = LiteGraph.node_images_path + url;
-    img.loading = "eager";
+    img.ready = false;
+    const self = this;
+    img.onload = function () {
+      this.ready = true;
+      self.setDirtyCanvas(true);
+    };
     return img;
   }
 
+  /**
+   * Console output. Restored original: keeps an in-node console buffer
+   * (capped by LGraphNode.MAX_CONSOLE — note: this constant is never
+   * defined in the original, so we fall back to 100). Forwards to
+   * graph.onNodeTrace if the graph is attached.
+   */
   trace(msg) {
-    if (this.graph) {
+    if (!this.console) {
+      this.console = [];
+    }
+    this.console.push(msg);
+    const maxConsole = LGraphNode.MAX_CONSOLE || 100;
+    if (this.console.length > maxConsole) {
+      this.console.shift();
+    }
+    if (this.graph && this.graph.onNodeTrace) {
       this.graph.onNodeTrace(this, msg);
-    } else {
-      console.log(msg);
     }
   }
 

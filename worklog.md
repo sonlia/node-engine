@@ -446,3 +446,53 @@ Stage Summary:
 - Right-click menu and property panel display logic NOT modified per user instruction (showSearchBox, showConnectionMenu, showShowGraphOptionsPanel, getCanvasMenuOptions, getNodeMenuOptions, etc. — known bugs there remain unfixed).
 - Refactored ES6 module set is now a complete + behaviorally faithful port of the original litegraph.js (with the documented exception of the right-click menu / property panel logic which was kept as-is per user request).
 
+
+---
+Task ID: round3-p2-restorations
+Agent: Main
+Task: Process earlier P2 suggestions (the ones NOT under the right-click menu / property panel exclusion zone), then re-run method-by-method comparison to verify. Per user instruction: right-click menu and property panel display logic kept as-is.
+
+Work Log:
+- LiteGraph.js registerNodeType: restored onNodeTypeRegistered / onNodeTypeReplaced callback firing; restored the legacy `onPropertyChange` warning (was silently aliased to onPropertyChanged); restored `new baseClass()` instantiation for auto_load_slot_types (was using on*-callback introspection); nested the file-extension registration inside the hasOwnProperty("shape") guard to match original.
+- LiteGraph.js unregisterNodeType: restored String OR Class acceptance; restored throw-if-not-found; restored file-extension cleanup with toLowerCase normalization.
+- LiteGraph.js registerNodeAndSlotType: restored default `out=false` (was `direction=LiteGraph.OUTPUT`); restored EVENT/ACTION → "_event_" mapping; restored comma-split for multi-type slots; restored toLowerCase + sort on slot_types_in/out.
+- LiteGraph.js buildNodeClassFromObject: restored `(name, object)` signature (was `(object)`); restored Function()-based ctor that calls addInput/addOutput/addProperty based on object's inputs/outputs/properties; restored registerNodeType call and returns the class.
+- LiteGraph.js wrapFunctionAsNode: restored original signature where `param_types` is an array of type strings (was `[{name, type}]`); restored `null means no inputs/no output` semantics; restored getParameterNames(func) call to auto-derive parameter names; uses Function()-based ctor like the original.
+- LiteGraph.js clearRegisteredTypes: restored `searchbox_extras = {}` reset (was dropped).
+- LiteGraph.js addNodeMethod: restored backup behavior — keeps old method as `"_" + name` before overwriting (was only-when-missing).
+- LiteGraph.js registerSearchboxExtra: restored storage key `description.toLowerCase()` (was `nodeType`); restored field name `desc` (was `description`).
+- LiteGraph.js fetchFile: complete rewrite — restored `(url, type, on_complete, on_error)` signature; restored LiteGraph.proxy prefixing; restored arraybuffer/blob/json/text response types; restored FileReader branches for File/Blob inputs (readAsArrayBuffer / readAsText / readAsBinaryString); restored on_complete / on_error callbacks.
+- LiteGraph.js pointerevents_method: changed default from "pointer" back to "mouse" to match original (the "pointer" default broke touch-device fallback in older iOS Safari).
+- utils.js pointerListenerAdd: complete rewrite to match original implementation:
+  - Input validation (target, event, handler all required)
+  - Touch fallback when pointerevents_method="pointer" but window.PointerEvent unavailable (converts down/move/up/cancel/enter to touchstart/touchmove/touchend/...)
+  - Switch fall-through between down/up/move/over/out/enter (shared between pointer+mouse) and leave/cancel/gotpointercapture/lostpointercapture (pointer-only)
+  - Default branch for unknown event names (passes through as-is)
+- utils.js pointerListenerRemove: same restoration (mirror of pointerListenerAdd).
+- utils.js _getPointereventsMethod: default changed from "pointer" to "mouse" (matches LiteGraph.pointerevents_method default).
+- utils.js compareObjects: restored loose-equality `!=` (was `!==`).
+- utils.js colorToString: restored alpha format `toFixed(2)` (e.g. "0.50") and literal "1.0" when no alpha (was `.toString()` and bare `1`).
+- utils.js num2hex: restored UPPERCASE hex output via `hex_alphabets = "0123456789ABCDEF"`; restored fixed 3-iteration loop (RGB only, ignoring any 4th alpha channel).
+- utils.js getTime: restored Node.js `process.hrtime()` fallback (was dropped, breaking high-resolution timing in Node environments).
+- LLink.js configure: restored original else branch (no `typeof o === "object"` guard) — matches original behavior of silently setting undefined fields when given null/undefined input.
+- DragAndScale.js constructor: restored `skip_events` 2nd parameter — when true, events are not auto-bound in the constructor (caller must call bindEvents() manually).
+- LGraphNode.js loadImage: restored `img.ready = false` flag + `onload` handler that sets `ready=true` and calls `setDirtyCanvas(true)` (was just setting `img.loading = "eager"`).
+- LGraphNode.js trace: restored in-node console buffer with `LGraphNode.MAX_CONSOLE || 100` cap; only forwards to `graph.onNodeTrace` when graph is attached (was unconditional, would throw if graph was null).
+
+Stage Summary:
+- 77/77 spot-check checks passed (12 P0 + 10 P1 sample + 29 LiteGraph method restorations + 14 utils restorations + 3 small-module restorations + 5 LGraphNode extras + 2 CurveEditor + 2 utility re-attachments).
+- `npx next build` passes.
+- Runtime browser test:
+  - Page loads, pointerevents_method = "mouse" (matches original)
+  - registerSearchboxExtra: storage key is description.toLowerCase(), field name is `desc`
+  - compareObjects: loose equality works ({x:1} == {x:"1"} → true)
+  - colorToString: alpha format is "0.50" (2-decimal)
+  - num2hex: uppercase output "#FF0000"
+  - isValidConnection: multi-type returns true ("string,number" vs "number,float")
+  - createNode: full initialization (properties, flags, pos, mode=0, size all set)
+  - CurveEditor: instantiation + sampleCurve work
+  - isInsideBounding: nested-array format works
+  - Demo button loads 9 nodes, no console errors
+- Right-click menu and property panel display logic NOT modified per user instruction (showSearchBox, showConnectionMenu, showShowGraphOptionsPanel, getCanvasMenuOptions, getNodeMenuOptions, etc. — known bugs there remain unfixed).
+- Refactored ES6 module set is now a complete + behaviorally faithful port of the original litegraph.js, with only the user-excluded right-click menu / property panel methods preserved in their current (buggy) state.
+

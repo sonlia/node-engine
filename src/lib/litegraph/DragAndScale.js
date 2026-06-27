@@ -14,8 +14,11 @@ import { pointerListenerAdd, pointerListenerRemove } from "./utils.js";
 class DragAndScale {
     /**
      * @param {HTMLElement} element - The DOM element (typically a canvas) to attach drag/scale behavior to
+     * @param {boolean} [skip_events=false] - If true, do not bind events in
+     *   the constructor (caller will invoke bindEvents() manually later).
+     *   Restored original 2nd parameter for API parity.
      */
-    constructor(element) {
+    constructor(element, skip_events) {
         /** @type {Float32Array} Pan offset [x, y] in canvas coordinates */
         this.offset = new Float32Array([0, 0]);
 
@@ -45,7 +48,10 @@ class DragAndScale {
 
         if (element) {
             this.element = element;
-            this.bindEvents(element);
+            // Match original: only auto-bind events when skip_events is falsy.
+            if (!skip_events) {
+                this.bindEvents(element);
+            }
         }
     }
 

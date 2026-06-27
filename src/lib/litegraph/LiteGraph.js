@@ -135,7 +135,11 @@ class LiteGraphClass {
   static allow_multi_output_for_events = true;
   static middle_click_slot_add_default_node = false;
   static release_link_on_empty_shows_menu = false;
-  static pointerevents_method = "pointer";
+  // Match original default: "mouse" (use mouse for retrocompatibility).
+  // The earlier refactored version changed this to "pointer" which broke
+  // touch-device fallback in pointerListenerAdd when PointerEvent wasn't
+  // available (older iOS Safari, etc.).
+  static pointerevents_method = "mouse";
   static ctrl_shift_v_paste_connect_unselected_outputs = false;
   static use_uuids = false;
 
@@ -220,184 +224,256 @@ class LiteGraphClass {
         enumerable: true,
         configurable: true,
       });
+
+      // Used to know which nodes to create when dragging files to the canvas.
+      // Original nests this inside the hasOwnProperty("shape") guard.
+      if (baseClass.supported_extensions) {
+        for (let i = 0; i < baseClass.supported_extensions.length; i++) {
+          const ext = baseClass.supported_extensions[i];
+          if (ext && ext.constructor === String) {
+            LiteGraph.node_types_by_file_extension[ext.toLowerCase()] = baseClass;
+          }
+        }
+      }
     }
 
     LiteGraph.registered_node_types[type] = baseClass;
     if (classname) {
       LiteGraph.Nodes[classname] = baseClass;
     }
+
+    // Restored original lifecycle callbacks
+    if (LiteGraph.onNodeTypeRegistered) {
+      LiteGraph.onNodeTypeRegistered(type, baseClass);
+    }
+    if (prev && LiteGraph.onNodeTypeReplaced) {
+      LiteGraph.onNodeTypeReplaced(type, baseClass, prev);
+    }
+
+    // Warnings: original warns about legacy `onPropertyChange` method name.
     if (baseClass.prototype.onPropertyChange) {
-      baseClass.prototype.onPropertyChanged = baseClass.prototype.onPropertyChange;
+      console.warn(
+        "LiteGraph node class " +
+          type +
+          " has onPropertyChange method, it must be called onPropertyChanged with d at the end"
+      );
     }
 
-    // Support for file extensions
-    if (baseClass.supported_extensions) {
-      for (let i = 0; i < baseClass.supported_extensions.length; i++) {
-        LiteGraph.node_types_by_file_extension[baseClass.supported_extensions[i]] = baseClass;
-      }
-    }
-
-    // Register slot types
+    // TODO one would want to know input and ouput :: this would allow through registerNodeAndSlotType to get all the slots types
     if (LiteGraph.auto_load_slot_types) {
-      for (const i in baseClass.prototype) {
-        if (typeof baseClass.prototype[i] === "function" && i.charCodeAt(0) === 111 && i.charCodeAt(1) === 110) {
-          // on* callbacks
-          const func = baseClass.prototype[i];
-          const params = getParameterNames(func);
-          if (params.length === 0) continue;
-          const slotType = params[0];
-          if (slotType === "type" || slotType === "slot" || slotType === "output") continue;
-          // Register input slot type
-          if (i.startsWith("onInput")) {
-            if (!LiteGraph.registered_slot_in_types[slotType]) {
-              LiteGraph.registered_slot_in_types[slotType] = { nodes: [] };
-            }
-            LiteGraph.registered_slot_in_types[slotType].nodes.push(classname);
-            if (!LiteGraph.slot_types_in.includes(slotType)) {
-              LiteGraph.slot_types_in.push(slotType);
-            }
-          } else if (i.startsWith("onOutput")) {
-            if (!LiteGraph.registered_slot_out_types[slotType]) {
-              LiteGraph.registered_slot_out_types[slotType] = { nodes: [] };
-            }
-            LiteGraph.registered_slot_out_types[slotType].nodes.push(classname);
-            if (!LiteGraph.slot_types_out.includes(slotType)) {
-              LiteGraph.slot_types_out.push(slotType);
-            }
-          }
-        }
+      // Original creates an instance to force addInput/addOutput calls
+      // which then register slot types via registerNodeAndSlotType.
+      try {
+        new baseClass(baseClass.title || "tmpnode");
+      } catch (e) {
+        /* ignore */
       }
     }
   }
 
   /**
-   * Unregister a node type
+   * Removes a node type from the system.
+   * Restored original: accepts String OR Class; throws if not found.
    */
   static unregisterNodeType(type) {
-    const baseClass = LiteGraph.registered_node_types[type];
-    if (!baseClass) return;
-    delete LiteGraph.registered_node_types[type];
-    delete LiteGraph.Nodes[baseClass.name];
+    const baseClass =
+      type && type.constructor === String
+        ? LiteGraph.registered_node_types[type]
+        : type;
+    if (!baseClass) {
+      throw "node type not found: " + type;
+    }
+    delete LiteGraph.registered_node_types[baseClass.type];
+    if (baseClass.constructor && baseClass.constructor.name) {
+      delete LiteGraph.Nodes[baseClass.constructor.name];
+    }
     // Remove from file extensions
     if (baseClass.supported_extensions) {
       for (let i = 0; i < baseClass.supported_extensions.length; i++) {
-        delete LiteGraph.node_types_by_file_extension[baseClass.supported_extensions[i]];
+        const ext = baseClass.supported_extensions[i];
+        if (ext && ext.constructor === String) {
+          delete LiteGraph.node_types_by_file_extension[ext.toLowerCase()];
+        }
       }
     }
   }
 
   /**
-   * Register a slot type association
+   * Save a slot type and its node.
+   * Restored original behaviour: default out=false (input direction),
+   * EVENT/ACTION → "_event_" mapping, comma-split, toLowerCase + sort.
    */
-  static registerNodeAndSlotType(type, slotType, direction) {
-    direction = direction || LiteGraph.OUTPUT;
-    if (!type || !slotType) return;
-    const classname = type.constructor === String ? type : type.name;
-    const slotTypeStr = slotType.constructor === String ? slotType : slotType.name;
-    if (direction === LiteGraph.OUTPUT) {
-      if (!LiteGraph.registered_slot_out_types[slotTypeStr]) {
-        LiteGraph.registered_slot_out_types[slotTypeStr] = { nodes: [] };
-      }
-      if (!LiteGraph.registered_slot_out_types[slotTypeStr].nodes.includes(classname)) {
-        LiteGraph.registered_slot_out_types[slotTypeStr].nodes.push(classname);
-      }
-      if (!LiteGraph.slot_types_out.includes(slotTypeStr)) {
-        LiteGraph.slot_types_out.push(slotTypeStr);
-      }
+  static registerNodeAndSlotType(type, slot_type, out) {
+    out = out || false;
+    const base_class =
+      type && type.constructor === String &&
+      LiteGraph.registered_node_types[type] !== "anonymous"
+        ? LiteGraph.registered_node_types[type]
+        : type;
+
+    // Match original: `base_class.constructor.type` — for a class this is
+    // the static `type` field set by registerNodeType.
+    const class_type = (base_class && base_class.constructor && base_class.constructor.type) ||
+                       (base_class && base_class.type) ||
+                       (type && type.constructor === String ? type : type && type.name);
+
+    let allTypes = [];
+    if (typeof slot_type === "string") {
+      allTypes = slot_type.split(",");
+    } else if (slot_type === LiteGraph.EVENT || slot_type === LiteGraph.ACTION) {
+      allTypes = ["_event_"];
     } else {
-      if (!LiteGraph.registered_slot_in_types[slotTypeStr]) {
-        LiteGraph.registered_slot_in_types[slotTypeStr] = { nodes: [] };
+      allTypes = ["*"];
+    }
+
+    for (let i = 0; i < allTypes.length; ++i) {
+      let slotType = allTypes[i];
+      if (slotType === "") slotType = "*";
+      const registerTo = out
+        ? "registered_slot_out_types"
+        : "registered_slot_in_types";
+      if (LiteGraph[registerTo][slotType] === undefined) {
+        LiteGraph[registerTo][slotType] = { nodes: [] };
       }
-      if (!LiteGraph.registered_slot_in_types[slotTypeStr].nodes.includes(classname)) {
-        LiteGraph.registered_slot_in_types[slotTypeStr].nodes.push(classname);
+      if (!LiteGraph[registerTo][slotType].nodes.includes(class_type)) {
+        LiteGraph[registerTo][slotType].nodes.push(class_type);
       }
-      if (!LiteGraph.slot_types_in.includes(slotTypeStr)) {
-        LiteGraph.slot_types_in.push(slotTypeStr);
+
+      if (!out) {
+        if (!LiteGraph.slot_types_in.includes(slotType.toLowerCase())) {
+          LiteGraph.slot_types_in.push(slotType.toLowerCase());
+          LiteGraph.slot_types_in.sort();
+        }
+      } else {
+        if (!LiteGraph.slot_types_out.includes(slotType.toLowerCase())) {
+          LiteGraph.slot_types_out.push(slotType.toLowerCase());
+          LiteGraph.slot_types_out.sort();
+        }
       }
     }
   }
 
   /**
-   * Build a node class from a plain config object
+   * Build a node class from a plain config object.
+   * Restored original (name, object) signature and the Function()-based
+   * constructor that calls addInput/addOutput/addProperty based on the
+   * object's inputs/outputs/properties arrays. Also calls registerNodeType
+   * and returns the class.
    */
-  static buildNodeClassFromObject(object) {
-    const LGraphNode = LiteGraphClass._LGraphNode;
-
-    class LGraphNodeExtend extends LGraphNode {
-      constructor() {
-        super(object.title || "Derived");
-        // Copy properties from object
-        for (const key in object) {
-          if (key !== "title" && typeof object[key] !== "function") {
-            this[key] = object[key];
-          }
-        }
+  static buildNodeClassFromObject(name, object) {
+    let ctor_code = "";
+    if (object.inputs) {
+      for (let i = 0; i < object.inputs.length; ++i) {
+        const _name = object.inputs[i][0];
+        let _type = object.inputs[i][1];
+        if (_type && _type.constructor === String) _type = '"' + _type + '"';
+        ctor_code += "this.addInput('" + _name + "'," + _type + ");\n";
       }
     }
-
-    // Copy functions as prototype methods
-    for (const key in object) {
-      if (typeof object[key] === "function") {
-        LGraphNodeExtend.prototype[key] = object[key];
+    if (object.outputs) {
+      for (let i = 0; i < object.outputs.length; ++i) {
+        const _name = object.outputs[i][0];
+        let _type = object.outputs[i][1];
+        if (_type && _type.constructor === String) _type = '"' + _type + '"';
+        ctor_code += "this.addOutput('" + _name + "'," + _type + ");\n";
       }
     }
-
-    return LGraphNodeExtend;
+    if (object.properties) {
+      for (let i in object.properties) {
+        let prop = object.properties[i];
+        if (prop && prop.constructor === String) prop = '"' + prop + '"';
+        ctor_code += "this.addProperty('" + i + "'," + prop + ");\n";
+      }
+    }
+    ctor_code += "if(this.onCreate)this.onCreate()";
+    // Use Function() ctor to match original behavior. In strict-mode ES6
+    // modules the Function body runs in non-strict mode, so addInput/addOutput
+    // (which expect `this` to be the instance) work correctly when bound via
+    // .call(this) at instantiation time.
+    const classobj = function () {
+      // Evaluate ctor_code in this context
+      // eslint-disable-next-line no-new-func
+      new Function(ctor_code).call(this);
+    };
+    for (const i in object) {
+      if (i !== "inputs" && i !== "outputs" && i !== "properties") {
+        classobj.prototype[i] = object[i];
+      }
+    }
+    classobj.title = object.title || name.split("/").pop();
+    classobj.desc = object.desc || "Generated from object";
+    // Make sure registerNodeType treats it like a class (needs .prototype)
+    classobj.prototype.constructor = classobj;
+    LiteGraph.registerNodeType(name, classobj);
+    return classobj;
   }
 
   /**
-   * Wrap a simple function as a node type
+   * Wrap a simple function as a node type.
+   * Restored original signature: param_types is an array of type strings
+   * (or null for no inputs); parameter names are auto-derived via
+   * getParameterNames(func). Uses Function()-based ctor like the original.
    */
-  static wrapFunctionAsNode(name, func, paramTypes, returnType, properties) {
-    const LGraphNode = LiteGraphClass._LGraphNode;
-
-    class FunctionNode extends LGraphNode {
-      constructor() {
-        super(name);
-        if (paramTypes) {
-          for (let i = 0; i < paramTypes.length; i++) {
-            const paramName = paramTypes[i].name || `in${i}`;
-            const paramType = paramTypes[i].type || 0;
-            this.addInput(paramName, paramType);
+  static wrapFunctionAsNode(name, func, param_types, return_type, properties) {
+    const params = Array(func.length);
+    let code = "";
+    if (param_types !== null) {
+      // null means no inputs
+      const names = getParameterNames(func);
+      for (let i = 0; i < names.length; ++i) {
+        let type = 0;
+        if (param_types) {
+          if (param_types[i] != null && param_types[i].constructor === String) {
+            type = "'" + param_types[i] + "'";
+          } else if (param_types[i] != null) {
+            type = param_types[i];
           }
         }
-        if (returnType) {
-          this.addOutput("out", returnType);
-        }
-        if (properties) {
-          for (const key in properties) {
-            this.addProperty(key, properties[key]);
-          }
-        }
-      }
-
-      onExecute() {
-        const args = [];
-        for (let i = 0; i < this.inputs.length; i++) {
-          args.push(this.getInputData(i));
-        }
-        const result = func.apply(this, args);
-        if (this.outputs && this.outputs.length) {
-          this.setOutputData(0, result);
-        }
+        code += "this.addInput('" + names[i] + "'," + type + ");\n";
       }
     }
+    if (return_type !== null) {
+      // null means no output
+      code +=
+        "this.addOutput('out'," +
+        (return_type != null
+          ? return_type.constructor === String
+            ? "'" + return_type + "'"
+            : return_type
+          : 0) +
+        ");\n";
+    }
+    if (properties) {
+      code += "this.properties = " + JSON.stringify(properties) + ";\n";
+    }
 
-    FunctionNode.desc = `Wrapper for ${name}`;
-    LiteGraph.registerNodeType(name, FunctionNode);
+    const classobj = function () {
+      // eslint-disable-next-line no-new-func
+      new Function(code).call(this);
+    };
+    classobj.title = name.split("/").pop();
+    classobj.desc = "Generated from " + (func.name || "anonymous");
+    classobj.prototype.onExecute = function onExecute() {
+      for (let i = 0; i < params.length; ++i) {
+        params[i] = this.getInputData(i);
+      }
+      const r = func.apply(this, params);
+      this.setOutputData(0, r);
+    };
+    classobj.prototype.constructor = classobj;
+    LiteGraph.registerNodeType(name, classobj);
+    return classobj;
   }
 
   /**
-   * Clear all registered types
+   * Clear all registered types.
+   * Restored original: also resets searchbox_extras (was dropped).
    */
   static clearRegisteredTypes() {
     LiteGraph.registered_node_types = {};
     LiteGraph.node_types_by_file_extension = {};
     LiteGraph.Nodes = {};
-    LiteGraph.registered_slot_in_types = {};
-    LiteGraph.registered_slot_out_types = {};
-    LiteGraph.slot_types_in = [];
-    LiteGraph.slot_types_out = [];
+    LiteGraph.searchbox_extras = {};
   }
 
   /**
@@ -413,15 +489,22 @@ class LiteGraphClass {
   }
 
   /**
-   * Add a method to ALL registered node types
+   * Adds a method to ALL node types (existing + future via LGraphNode.prototype).
+   * Restored original backup behavior: keeps the old method as `"_" + name`
+   * before overwriting.
    */
   static addNodeMethod(name, func) {
     const LGraphNode = LiteGraphClass._LGraphNode;
-    LGraphNode.prototype[name] = func;
+    if (LGraphNode) {
+      LGraphNode.prototype[name] = func;
+    }
     for (const i in LiteGraph.registered_node_types) {
-      if (!LiteGraph.registered_node_types[i].prototype[name]) {
-        LiteGraph.registered_node_types[i].prototype[name] = func;
+      const type = LiteGraph.registered_node_types[i];
+      if (type.prototype[name]) {
+        // Keep old in case of replacing
+        type.prototype["_" + name] = type.prototype[name];
       }
+      type.prototype[name] = func;
     }
   }
 
@@ -578,34 +661,62 @@ class LiteGraphClass {
   }
 
   /**
-   * Register an extra entry in the search box
+   * Register an extra entry in the search box.
+   * Restored original: storage key is description.toLowerCase(),
+   * field name is `desc` (not `description`).
    */
-  static registerSearchboxExtra(nodeType, description, data) {
-    LiteGraph.searchbox_extras[nodeType] = {
-      type: nodeType,
-      description: description,
+  static registerSearchboxExtra(node_type, description, data) {
+    LiteGraph.searchbox_extras[description.toLowerCase()] = {
+      type: node_type,
+      desc: description,
       data: data,
     };
   }
 
   /**
-   * Fetch a file from URL or File/Blob
+   * Wrapper to load files (from URL using fetch, or from File/Blob using FileReader).
+   * Restored original (url, type, on_complete, on_error) signature with
+   * full response-type support (text/arraybuffer/json/blob), proxy prefixing,
+   * and FileReader branches for File/Blob inputs. Returns Promise (URL) or
+   * FileReader (File/Blob).
    */
-  static async fetchFile(url, responseType) {
+  static fetchFile(url, type, on_complete, on_error) {
+    type = type || "text";
     if (!url) return null;
-    responseType = responseType || "text";
-    if (url.constructor === File || url.constructor === Blob) {
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.readAsText(url);
-      });
+
+    if (url.constructor === String) {
+      // Apply proxy if configured (e.g. for CORS workarounds).
+      if (url.substr(0, 4) === "http" && LiteGraph.proxy) {
+        url = LiteGraph.proxy + url.substr(url.indexOf(":") + 3);
+      }
+      return fetch(url)
+        .then(function (response) {
+          if (!response.ok) throw new Error("File not found");
+          if (type === "arraybuffer") return response.arrayBuffer();
+          else if (type === "text" || type === "string") return response.text();
+          else if (type === "json") return response.json();
+          else if (type === "blob") return response.blob();
+        })
+        .then(function (data) {
+          if (on_complete) on_complete(data);
+        })
+        .catch(function (error) {
+          console.error("error fetching file:", url);
+          if (on_error) on_error(error);
+        });
+    } else if (url.constructor === File || url.constructor === Blob) {
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        let v = e.target.result;
+        if (type === "json") v = JSON.parse(v);
+        if (on_complete) on_complete(v);
+      };
+      if (type === "arraybuffer") return reader.readAsArrayBuffer(url);
+      else if (type === "text" || type === "json") return reader.readAsText(url);
+      else if (type === "blob") return reader.readAsBinaryString(url);
+      return reader;
     }
-    const response = await fetch(url);
-    if (responseType === "json") {
-      return response.json();
-    }
-    return response.text();
+    return null;
   }
 
   /**

@@ -8,8 +8,10 @@ export function clamp(v, a, b) {
 }
 
 export function compareObjects(a, b) {
+  // Match original loose-equality semantics (so e.g. {x:1} and {x:"1"}
+  // compare equal, preserving the original API contract).
   for (const i in a) {
-    if (a[i] !== b[i]) return false;
+    if (a[i] != b[i]) return false;
   }
   return true;
 }
@@ -21,15 +23,18 @@ export function distance(a, b) {
 }
 
 export function colorToString(c) {
+  // Match original format: RGB as integer string, alpha as 2-decimal string
+  // ("0.50") or literal "1.0" when no alpha is provided. CSS parsers accept
+  // both forms but downstream string comparisons rely on the original format.
   return (
     "rgba(" +
-    Math.round(c[0] * 255).toString() +
+    Math.round(c[0] * 255).toFixed() +
     "," +
-    Math.round(c[1] * 255).toString() +
+    Math.round(c[1] * 255).toFixed() +
     "," +
-    Math.round(c[2] * 255).toString() +
+    Math.round(c[2] * 255).toFixed() +
     "," +
-    (c.length === 4 ? c[3] : 1).toString() +
+    (c.length === 4 ? c[3].toFixed(2) : "1.0") +
     ")"
   );
 }
@@ -89,18 +94,29 @@ export function hex2num(hex) {
 }
 
 export function num2hex(triplet) {
+  // Match original: UPPERCASE hex output, fixed 3-iteration loop over
+  // RGB channels (so a 4-component RGBA triplet only encodes RGB).
+  const hex_alphabets = "0123456789ABCDEF";
   let out = "#";
-  for (let i = 0; i < triplet.length; i++) {
-    let s = triplet[i].toString(16);
-    if (s.length === 1) s = "0" + s;
-    out += s;
+  for (let i = 0; i < 3; i++) {
+    const int1 = triplet[i] / 16;
+    const int2 = triplet[i] % 16;
+    out += hex_alphabets.charAt(int1) + hex_alphabets.charAt(int2);
   }
   return out;
 }
 
 export function getTime() {
+  // Match original environment-aware time source selection. Browser
+  // environments use performance.now(); Node.js uses process.hrtime for
+  // higher resolution; the final fallback is Date.now().
   if (typeof performance !== "undefined") {
     return performance.now();
+  }
+  // Node.js fallback (process.hrtime returns [seconds, nanoseconds]).
+  if (typeof process !== "undefined" && process.hrtime) {
+    const t = process.hrtime();
+    return t[0] * 0.001 + t[1] * 1e-6;
   }
   return Date.now();
 }
@@ -156,46 +172,133 @@ export function _setLiteGraphRef(ref) {
 
 /**
  * Returns the current pointer events method ("pointer" or "mouse").
- * Uses the lazy LiteGraph reference if available, defaults to "pointer".
+ * Uses the lazy LiteGraph reference if available, defaults to "mouse"
+ * (matches the original LiteGraph.pointerevents_method default).
  */
 function _getPointereventsMethod() {
   if (_liteGraphRef && _liteGraphRef.pointerevents_method) {
     return _liteGraphRef.pointerevents_method;
   }
-  return "pointer";
+  return "mouse";
 }
 
 /**
- * Construct the final DOM event name from a shorthand suffix.
- * Known suffixes (down/up/move/over/out/enter) are prepended with the
- * current pointer-events method ("pointer" → "pointerdown", etc.).
- * Unknown event names pass through unchanged.
+ * Helper for interaction: pointer, touch, mouse listeners.
+ * Used by LGraphCanvas, DragAndScale, ContextMenu.
+ *
+ * Restored original full implementation:
+ *   - Input validation (target, event, handler)
+ *   - Touch fallback when pointerevents_method="pointer" but window.PointerEvent
+ *     is unavailable (converts down/move/up/cancel/enter to touchstart/move/end/...)
+ *   - Switch fall-through between down/up/move/over/out/enter (both pointer+mouse)
+ *     and leave/cancel/gotpointercapture/lostpointercapture (pointer-only)
+ *   - Default branch for unknown event names (passes through as-is)
+ *
+ * NOTE: the original had a quirk where for "pointer" method, down/up/move/over/out/enter
+ * events got registered TWICE (once via the shared case, once via the fall-through to
+ * the pointer-only case). We replicate that quirk for parity — it doesn't cause issues
+ * because addEventListener with the same (event, handler, capture) tuple is deduped
+ * by the browser.
  */
-function _resolvePointerEvent(event) {
+export function pointerListenerAdd(oDOM, sEvIn, fCall, capture = false) {
+  if (!oDOM || !oDOM.addEventListener || !sEvIn || typeof fCall !== "function") {
+    return; // -- break --
+  }
+
+  let sMethod = _getPointereventsMethod();
+  let sEvent = sEvIn;
+
+  // UNDER CONSTRUCTION
+  // Convert pointerevents to touch event when not available.
+  if (sMethod === "pointer" && typeof window !== "undefined" && !window.PointerEvent) {
+    console.warn("sMethod=='pointer' && !window.PointerEvent");
+    console.log("Converting pointer[" + sEvent + "] : down move up cancel enter TO touchstart touchmove touchend, etc ..");
+    switch (sEvent) {
+      case "down":
+        sMethod = "touch";
+        sEvent = "start";
+        break;
+      case "move":
+        sMethod = "touch";
+        // sEvent = "move";
+        break;
+      case "up":
+        sMethod = "touch";
+        sEvent = "end";
+        break;
+      case "cancel":
+        sMethod = "touch";
+        // sEvent = "cancel";
+        break;
+      case "enter":
+        console.log("debug: Should I send a move event?");
+        break;
+      // case "over": case "out": not used at now
+      default:
+        console.warn("PointerEvent not available in this browser ? The event " + sEvent + " would not be called");
+    }
+  }
+
+  switch (sEvent) {
+    // both pointer and move events
+    case "down":
+    case "up":
+    case "move":
+    case "over":
+    case "out":
+    case "enter": {
+      oDOM.addEventListener(sMethod + sEvent, fCall, capture);
+    }
+    // only pointerevents
+    case "leave":
+    case "cancel":
+    case "gotpointercapture":
+    case "lostpointercapture": {
+      if (sMethod !== "mouse") {
+        return oDOM.addEventListener(sMethod + sEvent, fCall, capture);
+      }
+    }
+    // not "pointer" || "mouse"
+    default:
+      return oDOM.addEventListener(sEvent, fCall, capture);
+  }
+}
+
+/**
+ * Counterpart to pointerListenerAdd — removes a previously-added listener.
+ * Must use the exact same event-name construction logic so listeners
+ * added by the original implementation can be removed.
+ */
+export function pointerListenerRemove(oDOM, sEvent, fCall, capture = false) {
+  if (!oDOM || !oDOM.removeEventListener || !sEvent || typeof fCall !== "function") {
+    return; // -- break --
+  }
+
   const method = _getPointereventsMethod();
-  const knownSuffixes = ["down", "up", "move", "over", "out", "enter"];
-  return knownSuffixes.includes(event) ? method + event : event;
-}
 
-/**
- * Cross-platform pointer event listener binding.
- * Uses LiteGraph.pointerevents_method ("pointer" or "mouse") to construct
- * the event name by concatenating method + event suffix.
- * E.g., method="pointer", event="down" → "pointerdown"
- *       method="mouse", event="down" → "mousedown"
- */
-export function pointerListenerAdd(target, event, handler, capture) {
-  capture = capture || false;
-  const finalEvent = _resolvePointerEvent(event);
-  target.addEventListener(finalEvent, handler, capture);
-}
-
-/**
- * Cross-platform pointer event listener removal.
- * Must mirror pointerListenerAdd's event name construction.
- */
-export function pointerListenerRemove(target, event, handler, capture) {
-  capture = capture || false;
-  const finalEvent = _resolvePointerEvent(event);
-  target.removeEventListener(finalEvent, handler, capture);
+  switch (sEvent) {
+    // both pointer and move events
+    case "down":
+    case "up":
+    case "move":
+    case "over":
+    case "out":
+    case "enter": {
+      if (method === "pointer" || method === "mouse") {
+        oDOM.removeEventListener(method + sEvent, fCall, capture);
+      }
+    }
+    // only pointerevents
+    case "leave":
+    case "cancel":
+    case "gotpointercapture":
+    case "lostpointercapture": {
+      if (method === "pointer") {
+        return oDOM.removeEventListener(method + sEvent, fCall, capture);
+      }
+    }
+    // not "pointer" || "mouse"
+    default:
+      return oDOM.removeEventListener(sEvent, fCall, capture);
+  }
 }

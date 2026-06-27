@@ -18,17 +18,21 @@ export class LLink {
   }
 
   /**
-   * Configure this link from a serialized object or array
+   * Configure this link from a serialized object or array.
+   * Matches original: the else branch runs even for null/undefined,
+   * setting every field to undefined (callers are expected to pass a
+   * valid object — the silent undefined-set matches the original behavior
+   * and avoids masking upstream bugs).
    */
   configure(o) {
-    if (Array.isArray(o)) {
+    if (o && o.constructor === Array) {
       this.id = o[0];
       this.origin_id = o[1];
       this.origin_slot = o[2];
       this.target_id = o[3];
       this.target_slot = o[4];
       this.type = o[5];
-    } else if (o && typeof o === "object") {
+    } else {
       this.id = o.id;
       this.type = o.type;
       this.origin_id = o.origin_id;
