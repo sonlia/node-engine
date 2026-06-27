@@ -1689,6 +1689,14 @@ class LGraphCanvas {
         if (e.target.localName === "input") return;
 
         if (e.type === "keydown") {
+            // Tab — open search box
+            if (e.keyCode === 9 && this.allow_searchbox) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                this.showSearchBox(e);
+                return false;
+            }
+
             if (e.keyCode === 32) {
                 // space
                 this.dragging_canvas = true;
