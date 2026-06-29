@@ -673,71 +673,65 @@ class LGraphCanvas {
                     } else {
                         // search for outputs
                         if (node.outputs) {
-                            for (
-                                let i = 0, l = node.outputs.length;
-                                i < l;
-                                ++i
-                            ) {
+                            // UNIFIED: delegate to isOverNodeOutput so the
+                            // click hit-box is identical to the hover hit-box
+                            // used by processMouseMove. Previous hard-coded
+                            // 30×20 rect drifted from isOverNodeOutput's
+                            // 40×10 rect, causing click/hover mismatch.
+                            const outIdx = this.isOverNodeOutput(
+                                node,
+                                e.canvasX,
+                                e.canvasY
+                            );
+                            if (outIdx !== -1) {
+                                const i = outIdx;
                                 const output = node.outputs[i];
-                                const link_pos = node.getConnectionPos(false, i);
-                                if (
-                                    isInsideRectangle(
-                                        e.canvasX,
-                                        e.canvasY,
-                                        link_pos[0] - 15,
-                                        link_pos[1] - 10,
-                                        30,
-                                        20
-                                    )
-                                ) {
-                                    this.connecting_node = node;
-                                    this.connecting_output = output;
-                                    this.connecting_output.slot_index = i;
-                                    this.connecting_pos =
-                                        node.getConnectionPos(false, i);
-                                    this.connecting_slot = i;
+                                this.connecting_node = node;
+                                this.connecting_output = output;
+                                this.connecting_output.slot_index = i;
+                                this.connecting_pos =
+                                    node.getConnectionPos(false, i);
+                                this.connecting_slot = i;
 
-                                    if (LiteGraph.shift_click_do_break_link_from) {
-                                        if (e.shiftKey) {
-                                            node.disconnectOutput(i);
-                                        }
+                                if (LiteGraph.shift_click_do_break_link_from) {
+                                    if (e.shiftKey) {
+                                        node.disconnectOutput(i);
                                     }
-
-                                    if (is_double_click) {
-                                        if (node.onOutputDblClick) {
-                                            node.onOutputDblClick(i, e);
-                                        }
-                                    } else {
-                                        if (node.onOutputClick) {
-                                            node.onOutputClick(i, e);
-                                        }
-                                    }
-
-                                    skip_action = true;
-                                    break;
                                 }
+
+                                if (is_double_click) {
+                                    if (node.onOutputDblClick) {
+                                        node.onOutputDblClick(i, e);
+                                    }
+                                } else {
+                                    if (node.onOutputClick) {
+                                        node.onOutputClick(i, e);
+                                    }
+                                }
+
+                                // BUGFIX: foreground canvas must be dirtied so the
+                                // connecting link renders during drag. Original code
+                                // only broke out of the loop without marking dirty.
+                                this.dirty_canvas = true;
+                                this.dirty_bgcanvas = true;
+                                skip_action = true;
                             }
                         }
 
                         // search for inputs
                         if (node.inputs) {
-                            for (
-                                let i = 0, l = node.inputs.length;
-                                i < l;
-                                ++i
-                            ) {
+                            // UNIFIED: delegate to isOverNodeInput (same as
+                            // processMouseMove hover detection) so click and
+                            // hover hit-boxes are identical.
+                            const inIdx = this.isOverNodeInput(
+                                node,
+                                e.canvasX,
+                                e.canvasY
+                            );
+                            if (inIdx !== -1) {
+                                const i = inIdx;
                                 const input = node.inputs[i];
-                                const link_pos = node.getConnectionPos(true, i);
-                                if (
-                                    isInsideRectangle(
-                                        e.canvasX,
-                                        e.canvasY,
-                                        link_pos[0] - 15,
-                                        link_pos[1] - 10,
-                                        30,
-                                        20
-                                    )
-                                ) {
+                                {
                                     if (is_double_click) {
                                         if (node.onInputDblClick) {
                                             node.onInputDblClick(i, e);
@@ -780,6 +774,12 @@ class LGraphCanvas {
                                                     this.connecting_slot
                                                 );
 
+                                            // BUGFIX: connecting link is rendered in
+                                            // drawFrontCanvas (line ~2478), so we must
+                                            // mark dirty_canvas (foreground) — not just
+                                            // dirty_bgcanvas. Without this the dragged
+                                            // link never appears until mouseup.
+                                            this.dirty_canvas = true;
                                             this.dirty_bgcanvas = true;
                                             skip_action = true;
                                         }
@@ -793,6 +793,9 @@ class LGraphCanvas {
                                             node.getConnectionPos(true, i);
                                         this.connecting_slot = i;
 
+                                        // BUGFIX: same as above — foreground canvas
+                                        // must be dirtied so the connecting link renders.
+                                        this.dirty_canvas = true;
                                         this.dirty_bgcanvas = true;
                                         skip_action = true;
                                     }
@@ -2247,21 +2250,46 @@ class LGraphCanvas {
         this.graph._nodes.unshift(node);
     }
 
-    isOverNodeBox(node, canvasx, canvasy) {
-        const title_height = LiteGraph.NODE_TITLE_HEIGHT;
-        if (
-            isInsideRectangle(
-                canvasx,
-                canvasy,
-                node.pos[0] + 2,
-                node.pos[1] + 2 - title_height,
-                title_height - 4,
-                title_height - 4
-            )
-        ) {
-            return true;
+    /**
+     * Returns the title-collapse-box rectangle for `node` in canvas (world)
+     * coordinates: [x, y, w, h]. Used by BOTH the hit-test (isOverNodeBox)
+     * and the renderer (drawNodeShape) so the visual box and the click
+     * target can NEVER drift apart.
+     *
+     * Layout (matches the original visual rendering at drawNodeShape):
+     *   - The box is drawn in node-local coords centered at
+     *     (title_height*0.5, -title_height*0.5) with size box_size (10).
+     *   - We add a `hitPadding` (6px) around the visual box for the hit
+     *     rect so the click target is forgiving on high-DPI / small nodes,
+     *     but the CENTER is always identical to the drawn box.
+     *
+     * @param {LGraphNode} node
+     * @param {boolean} forHit  when true, returns the expanded hit rect;
+     *                          when false, returns the exact drawn rect.
+     * @returns {[number, number, number, number]} [x, y, w, h] in world coords
+     */
+    getNodeBoxRect(node, forHit = true) {
+        const th = LiteGraph.NODE_TITLE_HEIGHT;
+        const boxSize = 10;
+        // Visual box center in node-local coords: (th*0.5, -th*0.5)
+        // → world coords: (node.pos[0] + th*0.5, node.pos[1] - th*0.5)
+        const cx = node.pos[0] + th * 0.5;
+        const cy = node.pos[1] - th * 0.5;
+        if (forHit) {
+            const hitPad = 6;
+            const half = boxSize * 0.5 + hitPad;
+            return [cx - half, cy - half, half * 2, half * 2];
         }
-        return false;
+        const half = boxSize * 0.5;
+        return [cx - half, cy - half, half * 2, half * 2];
+    }
+
+    isOverNodeBox(node, canvasx, canvasy) {
+        // Use the shared rect so the hit region is ALWAYS aligned with the
+        // drawn box. Previous hard-coded `[node.pos[0]+2, node.pos[1]+2-th,
+        // th-4, th-4]` could drift from the drawn box after layout changes.
+        const r = this.getNodeBoxRect(node, true);
+        return isInsideRectangle(canvasx, canvasy, r[0], r[1], r[2], r[3]);
     }
 
     isOverNodeInput(node, canvasx, canvasy, slot_pos) {
