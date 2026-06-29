@@ -335,6 +335,15 @@ class LGraph extends EventTarget {
    * Classic full-graph traversal — original LiteGraph behavior.
    * Every node with mode=ALWAYS and onExecute() runs every step,
    * regardless of dirty state or cache.
+   *
+   * Interface compatibility (matches original litegraph):
+   *   - do_not_catch_errors=true  → calls node.doExecute() which wraps
+   *     onExecute with action tracking (nodes_executing,
+   *     nodes_executedAction, action_call) and fires onAfterExecuteNode.
+   *   - do_not_catch_errors=false → calls node.onExecute() directly
+   *     (bare, no action tracking) so exceptions propagate to the try/catch.
+   *   - Both branches flush _waiting_actions first when
+   *     LiteGraph.use_deferred_actions is enabled.
    */
   _runStepClassic(nodes, num, limit, do_not_catch_errors) {
     const runOnce = () => {
@@ -348,7 +357,14 @@ class LGraph extends EventTarget {
           node.executePendingActions();
         }
         if (node.mode === LiteGraph.ALWAYS && node.onExecute) {
-          node.onExecute();
+          // Match original: doExecute() in the no-catch path (action
+          // tracking + onAfterExecuteNode), bare onExecute() in the
+          // catch path so exceptions bubble up cleanly.
+          if (do_not_catch_errors && node.doExecute) {
+            node.doExecute();
+          } else {
+            node.onExecute();
+          }
         }
       }
       this.fixedtime += this.fixedtime_lapse;
@@ -377,16 +393,24 @@ class LGraph extends EventTarget {
    *
    * Flow (matches the design doc's "组合执行流程"):
    *   1. Iterate `_nodes_executable` in topological order (Strategy 4).
-   *   2. For each node, check `_dirty` (Strategy 1). If false, skip —
+   *   2. Flush _waiting_actions (deferred actions) — interface compat
+   *      with original litegraph's use_deferred_actions behavior.
+   *   3. For each node, check `_dirty` (Strategy 1). If false, skip —
    *      the node's previous output is still valid. Order matters:
    *      dirty check is cheaper than cache key computation, so we do
    *      it first.
-   *   3. If dirty, check getCachedOutput() (Strategy 3). On hit,
+   *   4. If dirty, check getCachedOutput() (Strategy 3). On hit,
    *      applyCachedOutput() and skip onExecute entirely.
-   *   4. On cache miss, dispatch onExecute:
-   *        - synchronous for light nodes
+   *   5. On cache miss, dispatch onExecute:
+   *        - synchronous for light nodes (via doExecute for action
+   *          tracking parity, or bare onExecute in catch-error path)
    *        - async (Promise / Worker) for `_isHeavy` nodes (Strategy 5)
-   *   5. After successful sync execution: storeCachedOutput() + clearDirty().
+   *   6. After successful sync execution: storeCachedOutput() + clearDirty().
+   *
+   * Interface compatibility:
+   *   - do_not_catch_errors=true  → doExecute() (action tracking + onAfterExecuteNode)
+   *   - do_not_catch_errors=false → onExecute() (bare, so try/catch sees the error)
+   *   - _waiting_actions flushed before each node when use_deferred_actions is on
    *
    * Note: the heavy-node async path falls back to sync execution if no
    * asyncScheduler is attached. This keeps default single-threaded
@@ -397,6 +421,17 @@ class LGraph extends EventTarget {
       for (let j = 0; j < limit; ++j) {
         const node = nodes[j];
         if (!node || node.mode !== LiteGraph.ALWAYS || !node.onExecute) continue;
+
+        // Flush deferred actions — interface compat with original litegraph.
+        // Must happen BEFORE the dirty check so pending actions are processed
+        // even if the node would otherwise be skipped.
+        if (
+          LiteGraph.use_deferred_actions &&
+          node._waiting_actions &&
+          node._waiting_actions.length
+        ) {
+          node.executePendingActions();
+        }
 
         // Strategy 1 (Reactive Dirty Marking) — skip clean nodes.
         // _alwaysDirty nodes (Timer, etc.) report dirty every step.
@@ -409,6 +444,10 @@ class LGraph extends EventTarget {
           const cached = node.getCachedOutput();
           if (cached != null) {
             if (node.applyCachedOutput) node.applyCachedOutput();
+            // Even on cache hit we should fire onAfterExecuteNode for
+            // interface parity — but original litegraph only fires it
+            // inside doExecute, so we skip here too. Cache hit = no
+            // re-execution = no after-execute callback.
             continue;
           }
         }
@@ -433,7 +472,14 @@ class LGraph extends EventTarget {
         }
 
         // Synchronous execution (default).
-        node.onExecute();
+        // Match _runStepClassic: doExecute() in the no-catch path for
+        // action tracking + onAfterExecuteNode; bare onExecute() in the
+        // catch path so exceptions propagate to the try/catch wrapper.
+        if (do_not_catch_errors && node.doExecute) {
+          node.doExecute();
+        } else {
+          node.onExecute();
+        }
         if (node.storeCachedOutput) node.storeCachedOutput();
         if (node.clearDirty) node.clearDirty();
       }
