@@ -7,6 +7,7 @@ import {
   LGraphNode,
   LGraphCanvas,
   LGraphGroup,
+  WorkerScheduler,
 } from '@/lib/litegraph';
 
 // ===== Node type registry for sidebar =====
@@ -23,6 +24,7 @@ const NODE_CATEGORIES: Record<string, { type: string; title: string; desc: strin
     { type: 'math/add', title: 'Add', desc: 'A + B' },
     { type: 'math/abs', title: 'Abs', desc: '|v|' },
     { type: 'math/clamp', title: 'Clamp', desc: 'Clamp value' },
+    { type: 'math/heavy_matrix', title: 'Heavy Matrix', desc: 'Worker offload demo (Strategy 5)' },
   ],
   'Logic': [
     { type: 'logic/compare', title: 'Compare', desc: 'Compare values' },
@@ -67,7 +69,7 @@ class ConditionalNode extends LGraphNode {
   static title = 'Conditional'; static desc = 'If/else gate';
 }
 class TimerNode extends LGraphNode {
-  constructor() { super('Timer'); this.addOutput('time', 'number'); this.addOutput('delta', 'number'); }
+  constructor() { super('Timer'); this.addOutput('time', 'number'); this.addOutput('delta', 'number'); this._alwaysDirty = true; }
   onExecute() { const now = this.graph ? this.graph.globaltime : 0; this.setOutputData(0, now); this.setOutputData(1, 0.016); }
   static title = 'Timer'; static desc = 'Elapsed time';
 }
@@ -97,6 +99,43 @@ class ClampNode extends LGraphNode {
   static title = 'Clamp';
 }
 
+// ===== Heavy node (Strategy 5 demo) =====
+// Simulates a compute-intensive operation. Marked _isHeavy = true so the
+// optimized run loop dispatches it to a WorkerScheduler. The actual compute
+// happens in the worker thread via the handler registered in the useEffect
+// below — the main thread stays free for UI rendering.
+//
+// When asyncScheduler is NOT attached (default), _runStepOptimized falls
+// back to calling onExecute() synchronously, so the node still works
+// correctly — just without the worker offload.
+class HeavyMatrixNode extends LGraphNode {
+  constructor() {
+    super('Heavy Matrix');
+    this.addInput('A', 'number');
+    this.addInput('B', 'number');
+    this.addOutput('det', 'number');
+    this.addProperty('size', 30, 'number');
+    this._isHeavy = true;
+    this.size = [140, 60];
+  }
+  // onExecute is only called when no asyncScheduler is attached.
+  // When a scheduler IS attached, the worker handler runs instead.
+  onExecute() {
+    const A = this.getInputData(0) != null ? this.getInputData(0) : 1;
+    const B = this.getInputData(1) != null ? this.getInputData(1) : 1;
+    const n = Math.max(2, Math.min(100, this.properties.size | 0));
+    let acc = A * B;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        acc += Math.sin(i * 0.1) * Math.cos(j * 0.1);
+      }
+    }
+    this.setOutputData(0, acc);
+  }
+  static title = 'Heavy Matrix';
+  static desc = 'Simulated heavy compute (Strategy 5 demo)';
+}
+
 LiteGraph.registerNodeType('basic/number', NumberNode);
 LiteGraph.registerNodeType('math/math', MathOpNode);
 LiteGraph.registerNodeType('basic/display', DisplayNode);
@@ -109,6 +148,7 @@ LiteGraph.registerNodeType('math/multiply', MultiplyNode);
 LiteGraph.registerNodeType('math/add', AddNode);
 LiteGraph.registerNodeType('math/abs', AbsNode);
 LiteGraph.registerNodeType('math/clamp', ClampNode);
+LiteGraph.registerNodeType('math/heavy_matrix', HeavyMatrixNode);
 
 // ===== Demo graph =====
 function createDemoGraph(graph: LGraph) {
@@ -215,8 +255,19 @@ export default function Home() {
   const [showCodePanel, setShowCodePanel] = useState(false);
   const [codePanelTab, setCodePanelTab] = useState<'original' | 'refactored'>('refactored');
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({ Basic: true, Math: true });
+  // ===== Execution Optimization State (Strategy fusion switches) =====
+  // useOptimized: toggles config.optimized_execution (Strategies 1+3+4).
+  //   When on, runStep dispatches to _runStepOptimized which skips clean
+  //   nodes, hits the WeakMap cache, and walks the precomputed adjacency.
+  //   When off, falls back to classic full-traversal (every node every step).
+  // useWorker: toggles the WorkerScheduler (Strategy 5). When on, heavy
+  //   nodes (_isHeavy=true, e.g. HeavyMatrixNode) are dispatched to a
+  //   Web Worker pool. When off, heavy nodes run synchronously.
+  const [useOptimized, setUseOptimized] = useState(true);
+  const [useWorker, setUseWorker] = useState(false);
   const graphCanvasRef = useRef<LGraphCanvas | null>(null);
   const graphRef = useRef<LGraph | null>(null);
+  const schedulerRef = useRef<WorkerScheduler | null>(null);
   const propPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Poll selected node from graphCanvas
@@ -263,6 +314,39 @@ export default function Home() {
     graphCanvas.render_curved_connections = true;
     graphCanvas.links_render_mode = LiteGraph.SPLINE_LINK;
 
+    // ===== Execution Optimization Fusion (Strategies 1/2/3/4/5) =====
+    // Enable the optimized runStep path (Strategy 1+3+4 fusion: dirty
+    // marking + WeakMap cache + topological pre-order). When a node is
+    // _isHeavy, the optimized loop dispatches it to the WorkerScheduler
+    // (Strategy 5). When the worker resolves, WorkerScheduler calls
+    // graph.runTarget(downstream) for each consumer (Strategy 2 fusion)
+    // so only the affected branch recomputes.
+    if (!graph.config) graph.config = {};
+    graph.config.optimized_execution = useOptimized;
+
+    if (useWorker) {
+      const scheduler = new WorkerScheduler({ poolSize: 2 });
+      schedulerRef.current = scheduler;
+      graph.asyncScheduler = scheduler;
+
+      // Register a worker handler for the heavy_matrix node type.
+      // The function body is sent to the worker as a string and
+      // reconstructed via `new Function`, so it must be self-contained
+      // (no closure captures) — only the (inputs, properties) args.
+      scheduler.registerHandler('math/heavy_matrix', function (inputs, properties) {
+        const A = inputs[0] != null ? inputs[0] : 1;
+        const B = inputs[1] != null ? inputs[1] : 1;
+        const n = Math.max(2, Math.min(100, (properties.size | 0) || 30));
+        let acc = A * B;
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            acc += Math.sin(i * 0.1) * Math.cos(j * 0.1);
+          }
+        }
+        return [acc];
+      });
+    }
+
     createDemoGraph(graph);
     queueMicrotask(() => setNodeCount(graph._nodes.length));
 
@@ -287,8 +371,52 @@ export default function Home() {
       graphCanvas.stopRendering();
       ro.disconnect();
       if (propPollRef.current) clearInterval(propPollRef.current);
+      // Terminate the worker pool to avoid leaked Worker threads on HMR.
+      if (schedulerRef.current) {
+        schedulerRef.current.terminate();
+        schedulerRef.current = null;
+      }
     };
   }, []);
+
+  // Live-toggle the optimized execution flag without recreating the graph.
+  // Strategy fusion toggles: 1+3+4 (optimized) and 5 (worker).
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    if (!graph.config) graph.config = {};
+    graph.config.optimized_execution = useOptimized;
+  }, [useOptimized]);
+
+  // Live-toggle the WorkerScheduler. When toggled off, the graph falls
+  // back to synchronous execution for heavy nodes (they still run, just
+  // on the main thread). When toggled on, a new scheduler is created and
+  // the heavy_matrix handler is re-registered.
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    if (useWorker && !schedulerRef.current) {
+      const scheduler = new WorkerScheduler({ poolSize: 2 });
+      schedulerRef.current = scheduler;
+      graph.asyncScheduler = scheduler;
+      scheduler.registerHandler('math/heavy_matrix', function (inputs, properties) {
+        const A = inputs[0] != null ? inputs[0] : 1;
+        const B = inputs[1] != null ? inputs[1] : 1;
+        const n = Math.max(2, Math.min(100, (properties.size | 0) || 30));
+        let acc = A * B;
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            acc += Math.sin(i * 0.1) * Math.cos(j * 0.1);
+          }
+        }
+        return [acc];
+      });
+    } else if (!useWorker && schedulerRef.current) {
+      schedulerRef.current.terminate();
+      schedulerRef.current = null;
+      graph.asyncScheduler = null;
+    }
+  }, [useWorker]);
 
   const handleAddNodeType = useCallback((type: string) => {
     const graph = graphRef.current;
@@ -423,6 +551,25 @@ LiteGraph.registerNodeType("basic/number", NumberNode);`,
           <button onClick={handleLoadDemo} className="px-3 py-1.5 rounded-md text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-colors">↻ Demo</button>
           <button onClick={handleClear} className="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 border border-gray-500/30 transition-colors">✕ Clear</button>
           <div className="px-2 py-1 rounded bg-gray-800 text-[10px] text-gray-500">Nodes: {nodeCount}</div>
+          {/* ===== Execution Optimization Toggles =====
+               Strategy fusion switches (1+3+4 optimized, 5 worker).
+               Default ON for optimized so static graphs skip redundant
+               re-execution. Worker is OFF by default — enable to see
+               HeavyMatrixNode offload to a Web Worker pool. */}
+          <button
+            onClick={() => setUseOptimized(!useOptimized)}
+            title="Toggle optimized execution (Strategies 1+3+4: dirty marking + WeakMap cache + topological pre-order)"
+            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${useOptimized ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 border border-gray-500/30'}`}
+          >
+            {useOptimized ? '⚡ Opt' : '○ Opt'}
+          </button>
+          <button
+            onClick={() => setUseWorker(!useWorker)}
+            title="Toggle Worker pool (Strategy 5: offload heavy nodes to Web Workers)"
+            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${useWorker ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 border border-gray-500/30'}`}
+          >
+            {useWorker ? '⚙ Worker' : '○ Worker'}
+          </button>
           <button onClick={() => setShowCodePanel(!showCodePanel)} className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${showCodePanel ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 border border-gray-500/30'}`}>
             {'</>'}
           </button>
