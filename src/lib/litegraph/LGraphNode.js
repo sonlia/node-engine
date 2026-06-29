@@ -1865,259 +1865,59 @@ class LGraphNode extends EventTarget {
     return customWidget;
   }
 
-  // ===================== EVENT/TRIGGER =====================
 
-  addOnTriggerInput() {
-    const trigS = this.findInputSlot("onTrigger");
-    if (trigS === -1) {
-      this.addInput("onTrigger", LiteGraph.EVENT, {
-        optional: true,
-        nameLocked: true,
-      });
-      return this.findInputSlot("onTrigger");
-    }
-    return trigS;
-  }
+  // ===================== EVENT/TRIGGER (DEPRECATED) =====================
+  // The EVENT/ACTION execution model has been removed. These methods are
+  // kept as no-op stubs for interface compatibility — external node types
+  // that override onAction / onTrigger / onAfterExecuteNode or call
+  // doExecute / trigger / triggerSlot will not crash, but the methods do
+  // nothing. The engine is purely data-flow driven (mode=ALWAYS) now.
 
-  addOnExecutedOutput() {
-    const trigS = this.findOutputSlot("onExecuted");
-    if (trigS === -1) {
-      // Original uses LiteGraph.ACTION (not EVENT) for the onExecuted output.
-      this.addOutput("onExecuted", LiteGraph.ACTION, {
-        optional: true,
-        nameLocked: true,
-      });
-      return this.findOutputSlot("onExecuted");
-    }
-    return trigS;
-  }
+  /** @deprecated no-op stub */
+  addOnTriggerInput() { return -1; }
 
-  onAfterExecuteNode(param, options) {
-    const trigS = this.findOutputSlot("onExecuted");
-    if (trigS !== -1) {
-      this.triggerSlot(trigS, param, null, options);
-    }
-  }
+  /** @deprecated no-op stub */
+  addOnExecutedOutput() { return -1; }
 
-  changeMode(modeTo) {
-    switch (modeTo) {
-      case LiteGraph.ON_EVENT:
-        break;
-      case LiteGraph.ON_TRIGGER:
-        this.addOnTriggerInput();
-        this.addOnExecutedOutput();
-        break;
-      case LiteGraph.NEVER:
-        break;
-      case LiteGraph.ALWAYS:
-        break;
-      case LiteGraph.ON_REQUEST:
-        break;
-      default:
-        return false;
-    }
-    this.mode = modeTo;
-    return true;
-  }
+  /** @deprecated no-op stub */
+  onAfterExecuteNode(param, options) {}
+
+  /** @deprecated no-op stub — only ALWAYS (0) and NEVER (2) modes honored */
+  changeMode(modeTo) { this.mode = modeTo; return true; }
 
   /**
-   * Triggers the node code execution. Restored original behavior:
-   *   - generates unique action_call id
-   *   - tracks graph.nodes_executing / nodes_executedAction
-   *   - sets exec_version = graph.iteration
-   *   - calls onAfterExecuteNode(param, options)
-   * (execute_triggered removed — was only for box-color flash animation)
+   * @deprecated no-op stub. Was: wrap onExecute with action tracking.
+   * Now just calls onExecute directly when do_not_catch_errors=false
+   * (the catch path). The no-catch path callers should call onExecute
+   * themselves — but we keep this stub so runStep internals that check
+   * `node.doExecute` dont crash.
    */
   doExecute(param, options) {
-    options = options || {};
-    if (this.onExecute) {
-      if (!options.action_call)
-        options.action_call =
-          this.id + "_exec_" + Math.floor(Math.random() * 9999);
-
-      if (this.graph) this.graph.nodes_executing[this.id] = true;
-
-      if (LiteGraph.catch_exceptions) {
-        try {
-          this.onExecute(param, options);
-        } catch (err) {
-          console.error(`Error executing node "${this.title}":`, err);
-          if (LiteGraph.throw_errors) throw err;
-        }
-      } else {
-        this.onExecute(param, options);
-      }
-
-      if (this.graph) this.graph.nodes_executing[this.id] = false;
-
-      this.exec_version = this.graph ? this.graph.iteration : 0;
-      if (options && options.action_call) {
-        this.action_call = options.action_call;
-        if (this.graph) this.graph.nodes_executedAction[this.id] = options.action_call;
-      }
-    }
-    // execute_triggered removed — was only used for box-color flash animation
-    // which has been removed from LGraphCanvas.drawNodeShape.
+    if (this.onExecute) this.onExecute(param, options);
     if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
   }
 
-  executePendingActions() {
-    if (!this._waiting_actions || !this._waiting_actions.length) return;
-    for (let i = 0; i < this._waiting_actions.length; ++i) {
-      const p = this._waiting_actions[i];
-      // Original format: [name, param, options, action_slot]
-      this.onAction(p[0], p[1], p[2], p[3]);
-    }
-    this._waiting_actions.length = 0;
-  }
+  /** @deprecated no-op stub */
+  executePendingActions() {}
 
-  /**
-   * Immediate action executor — restored original semantics.
-   * (The deferred behavior lives in triggerSlot, NOT here.)
-   * Generates action_call id, tracks graph.nodes_actioning /
-   * nodes_executedAction, calls onAfterExecuteNode.
-   * (action_triggered removed — was only for box-color flash animation)
-   */
+  /** @deprecated no-op stub */
   actionDo(action, param, options, action_slot) {
-    options = options || {};
-    if (this.onAction) {
-      if (!options.action_call)
-        options.action_call =
-          this.id + "_" + (action ? action : "action") + "_" + Math.floor(Math.random() * 9999);
-
-      if (this.graph) this.graph.nodes_actioning[this.id] = action ? action : "actioning";
-
-      this.onAction(action, param, options, action_slot);
-
-      if (this.graph) this.graph.nodes_actioning[this.id] = false;
-
-      if (options && options.action_call) {
-        this.action_call = options.action_call;
-        if (this.graph) this.graph.nodes_executedAction[this.id] = options.action_call;
-      }
-    }
-    // action_triggered removed — was only used for box-color flash animation.
+    if (this.onAction) this.onAction(action, param, options, action_slot);
     if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
   }
 
-  /**
-   * Triggers an event in this node — fires any output with a matching name
-   * (or all EVENT outputs when action is falsy).
-   */
-  trigger(action, param, options) {
-    if (!this.outputs || !this.outputs.length) return;
-    // _last_trigger_time removed — was only used for the trigger-flash
-    // background redraw which has been removed from LGraphCanvas.draw().
-    for (let i = 0; i < this.outputs.length; ++i) {
-      const output = this.outputs[i];
-      if (!output || output.type !== LiteGraph.EVENT) continue;
-      if (action && output.name !== action) continue;
-      this.triggerSlot(i, param, null, options);
-    }
-  }
+  /** @deprecated no-op stub */
+  trigger(action, param, options) {}
 
-  /**
-   * Triggers a slot event: cycles output links and fires either doExecute
-   * (for ON_TRIGGER nodes) or actionDo (immediate) / deferred queue push
-   * (based on LiteGraph.use_deferred_actions).
-   * Restored original parameters: link_id filter, options, action_call ids,
-   * _last_time marking on links.
-   */
-  triggerSlot(slot, param, link_id, options) {
-    options = options || {};
-    if (!this.outputs) return;
-    if (slot == null) {
-      console.error("slot must be a number");
-      return;
-    }
-    if (slot.constructor !== Number)
-      console.warn("slot must be a number, use node.trigger('name') if you want to use a string");
+  /** @deprecated no-op stub */
+  triggerSlot(slot, param, link_id, options) {}
 
-    const output = this.outputs[slot];
-    if (!output) return;
-    const links = output.links;
-    if (!links || !links.length) return;
+  /** @deprecated no-op stub */
+  clearTriggeredSlot(slot, link_id) {}
 
-    // _last_trigger_time removed (see trigger() above).
-
-    for (let k = 0; k < links.length; ++k) {
-      const id = links[k];
-      if (link_id != null && link_id !== id) continue;
-      const link_info = this.graph.links[links[k]];
-      if (!link_info) continue;
-      link_info._last_time = LiteGraph.getTime();
-
-      const node = this.graph.getNodeById(link_info.target_id);
-      if (!node) continue;
-
-      const target_connection = node.inputs[link_info.target_slot];
-
-      if (node.mode === LiteGraph.ON_TRIGGER) {
-        if (!options.action_call)
-          options.action_call =
-            this.id + "_trigg_" + Math.floor(Math.random() * 9999);
-        if (node.onExecute) {
-          node.doExecute(param, options);
-        }
-      } else if (node.onAction) {
-        if (!options.action_call)
-          options.action_call =
-            this.id + "_act_" + Math.floor(Math.random() * 9999);
-        if (LiteGraph.use_deferred_actions && node.onExecute) {
-          if (!node._waiting_actions) node._waiting_actions = [];
-          node._waiting_actions.push([
-            target_connection.name,
-            param,
-            options,
-            link_info.target_slot,
-          ]);
-        } else {
-          node.actionDo(target_connection.name, param, options, link_info.target_slot);
-        }
-      }
-    }
-  }
-
-  /**
-   * Clears the trigger-slot animation markers on a specific output slot
-   * (and optionally a specific link within that slot).
-   * Restored original behavior: clears `link._last_time = 0` (NOT
-   * `output._triggered`), iterates links with optional link_id filter.
-   */
-  clearTriggeredSlot(slot, link_id) {
-    if (!this.outputs) return;
-    const output = this.outputs[slot];
-    if (!output) return;
-    const links = output.links;
-    if (!links || !links.length) return;
-
-    for (let k = 0; k < links.length; ++k) {
-      const id = links[k];
-      if (link_id != null && link_id !== id) continue;
-      const link_info = this.graph.links[links[k]];
-      if (!link_info) continue;
-      link_info._last_time = 0;
-    }
-  }
-
-  /**
-   * Convenience: clear triggered markers on ALL output slots.
-   */
-  clearTriggeredSlots() {
-    if (!this.outputs) return;
-    for (let i = 0; i < this.outputs.length; ++i) {
-      this.clearTriggeredSlot(i, null);
-    }
-  }
-
-  /**
-   * Execute an action on this node (immediate, bypasses deferred queue).
-   * Similar to actionDo but executes immediately regardless of use_deferred_actions.
-   */
+  /** @deprecated no-op stub */
   executeAction(actionName, data) {
-    if (this.onAction) {
-      this.onAction(actionName, data);
-    }
+    if (this.onAction) this.onAction(actionName, data);
   }
 
   // ===================== MISC =====================

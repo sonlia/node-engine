@@ -67,11 +67,18 @@ class LiteGraphClass {
   static INPUT = 1;
   static OUTPUT = 2;
 
-  // ===================== EVENT/ACTION =====================
+  // ===================== EVENT/ACTION (DEPRECATED) =====================
+  // The EVENT/ACTION execution model has been removed. These constants are
+  // kept only so external node types that reference LiteGraph.EVENT /
+  // LiteGraph.ACTION as slot type sentinels don't crash. They are treated
+  // as ordinary types by isValidConnection now (no special event linking).
   static EVENT = -1;
   static ACTION = -1;
 
   // ===================== NODE MODES =====================
+  // ON_EVENT (1) and ON_TRIGGER (3) modes are no longer enforced — the
+  // engine only honors ALWAYS (0) and NEVER (2). The constants stay for
+  // API compatibility with code that reads/writes node.mode.
   static NODE_MODES = ["Always", "On Event", "Never", "On Trigger"];
   static NODE_MODES_COLORS = ["#666", "#422", "#333", "#224", "#626"];
   static ALWAYS = 0;
@@ -131,7 +138,7 @@ class LiteGraphClass {
 
   // ===================== BEHAVIOR =====================
   static alt_drag_do_clone_nodes = false;
-  static do_add_triggers_slots = false;
+  static do_add_triggers_slots = false; // deprecated, no-op (EVENT/ACTION removed)
   static allow_multi_output_for_events = true;
   static middle_click_slot_add_default_node = false;
   static release_link_on_empty_shows_menu = false;
@@ -150,7 +157,7 @@ class LiteGraphClass {
   static catch_exceptions = true;
   static throw_errors = true;
   static allow_scripts = false;
-  static use_deferred_actions = true;
+  static use_deferred_actions = false; // deprecated, no-op (EVENT/ACTION removed)
 
   /**
    * Register a node class so it can be listed when the user wants to create a new one.
@@ -627,9 +634,10 @@ class LiteGraphClass {
     }
 
     if (
-      typeA === typeB ||
-      (typeA === LiteGraph.EVENT && typeB === LiteGraph.ACTION) ||
-      (typeA === LiteGraph.ACTION && typeB === LiteGraph.EVENT)
+      typeA === typeB
+      // EVENT/ACTION cross-linking removed — the event execution model
+      // is gone. EVENT and ACTION are now treated as opaque type sentinels
+      // that only connect to themselves (covered by typeA === typeB above).
     ) {
       return true;
     }
