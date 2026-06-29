@@ -13,7 +13,6 @@ import { LGraphGroup } from "./LGraphGroup.js";
 import { DragAndScale } from "./DragAndScale.js";
 import { LGraphCanvas } from "./LGraphCanvas.js";
 import { ContextMenu } from "./ContextMenu.js";
-import { CurveEditor } from "./CurveEditor.js";
 import { WorkerScheduler } from "./WorkerScheduler.js";
 import {
   _setLiteGraphRef,
@@ -49,7 +48,6 @@ LiteGraph.LGraphGroup = LGraphGroup;
 LiteGraph.LGraphCanvas = LGraphCanvas;
 LiteGraph.DragAndScale = DragAndScale;
 LiteGraph.ContextMenu = ContextMenu;
-LiteGraph.CurveEditor = CurveEditor;
 LiteGraph.WorkerScheduler = WorkerScheduler;
 
 // Register utility functions on LiteGraph for API compatibility.
@@ -97,7 +95,6 @@ export { LGraphGroup } from "./LGraphGroup.js";
 export { DragAndScale } from "./DragAndScale.js";
 export { LGraphCanvas } from "./LGraphCanvas.js";
 export { ContextMenu } from "./ContextMenu.js";
-export { CurveEditor } from "./CurveEditor.js";
 export { WorkerScheduler } from "./WorkerScheduler.js";
 
 export {
