@@ -308,13 +308,10 @@ class LGraph extends EventTarget {
 
     limit = limit || nodes.length;
 
-    // Dispatch to the optimized path when enabled; otherwise run the
-    // classic full-traversal loop for backward compatibility.
-    if (this.config && this.config.optimized_execution) {
-      this._runStepOptimized(nodes, limit, do_not_catch_errors);
-    } else {
-      this._runStepClassic(nodes, num, limit, do_not_catch_errors);
-    }
+    // Dispatch to the unified executor. The `optimized` flag controls
+    // whether the dirty-check / cache-hit / async-dispatch fast paths run.
+    const optimized = !!(this.config && this.config.optimized_execution);
+    this._runStepInternal(nodes, num, limit, do_not_catch_errors, optimized);
 
     const now = getTime();
     let elapsed = now - start;
@@ -345,10 +342,36 @@ class LGraph extends EventTarget {
    *   - Both branches flush _waiting_actions first when
    *     LiteGraph.use_deferred_actions is enabled.
    */
-  _runStepClassic(nodes, num, limit, do_not_catch_errors) {
+  /**
+   * Unified per-step executor — fuses Strategies 1, 3, 4, 5 with the
+   * classic full-traversal path. The `optimized` flag controls whether
+   * the dirty-check / cache-hit / async-dispatch fast paths run.
+   *
+   * Shared logic (both paths):
+   *   - Flush _waiting_actions before each node (use_deferred_actions compat)
+   *   - doExecute() when do_not_catch_errors=true (action tracking + onAfterExecuteNode)
+   *   - bare onExecute() when do_not_catch_errors=false (exceptions bubble to try/catch)
+   *   - onExecuteStep / onAfterExecute callbacks
+   *
+   * Optimized-only fast paths:
+   *   - Strategy 1: skip clean nodes (node.isDirty() === false)
+   *   - Strategy 3: cache hit → applyCachedOutput, skip onExecute
+   *   - Strategy 5: heavy node → asyncScheduler dispatch, skip sync onExecute
+   *   - Post-exec: storeCachedOutput + clearDirty
+   *
+   * Merging the two previous methods (_runStepClassic + _runStepOptimized)
+   * eliminates ~100 lines of duplicated error-handling / callback /
+   * deferred-actions code.
+   */
+  _runStepInternal(nodes, num, limit, do_not_catch_errors, optimized) {
     const runOnce = () => {
       for (let j = 0; j < limit; ++j) {
         const node = nodes[j];
+        if (!node || node.mode !== LiteGraph.ALWAYS || !node.onExecute) continue;
+
+        // Flush deferred actions — interface compat (both paths).
+        // Must happen BEFORE the dirty check so pending actions are
+        // processed even if the node would otherwise be skipped.
         if (
           LiteGraph.use_deferred_actions &&
           node._waiting_actions &&
@@ -356,15 +379,56 @@ class LGraph extends EventTarget {
         ) {
           node.executePendingActions();
         }
-        if (node.mode === LiteGraph.ALWAYS && node.onExecute) {
-          // Match original: doExecute() in the no-catch path (action
-          // tracking + onAfterExecuteNode), bare onExecute() in the
-          // catch path so exceptions bubble up cleanly.
-          if (do_not_catch_errors && node.doExecute) {
-            node.doExecute();
-          } else {
-            node.onExecute();
+
+        if (optimized) {
+          // Strategy 1 (Reactive Dirty Marking) — skip clean nodes.
+          // _alwaysDirty nodes (Timer, etc.) report dirty every step.
+          if (node.isDirty && !node.isDirty()) {
+            continue;
           }
+
+          // Strategy 3 (Result Caching) — fast path on cache hit.
+          if (node.getCachedOutput) {
+            const cached = node.getCachedOutput();
+            if (cached != null) {
+              if (node.applyCachedOutput) node.applyCachedOutput();
+              continue;
+            }
+          }
+
+          // Strategy 5 (Async Execution) — heavy nodes off the main thread.
+          if (node._isHeavy && this.asyncScheduler && !node._asyncPending) {
+            node._asyncPending = true;
+            this.asyncScheduler
+              .run(node)
+              .then(() => {
+                node._asyncPending = false;
+                if (node.storeCachedOutput) node.storeCachedOutput();
+                if (node.clearDirty) node.clearDirty();
+              })
+              .catch((err) => {
+                node._asyncPending = false;
+                if (LiteGraph.debug) {
+                  console.error("[LiteGraph] async node failed", node, err);
+                }
+              });
+            continue;
+          }
+        }
+
+        // Synchronous execution (both paths).
+        // doExecute() in the no-catch path for action tracking +
+        // onAfterExecuteNode; bare onExecute() in the catch path so
+        // exceptions propagate to the try/catch wrapper.
+        if (do_not_catch_errors && node.doExecute) {
+          node.doExecute();
+        } else {
+          node.onExecute();
+        }
+
+        if (optimized) {
+          if (node.storeCachedOutput) node.storeCachedOutput();
+          if (node.clearDirty) node.clearDirty();
         }
       }
       this.fixedtime += this.fixedtime_lapse;
@@ -372,11 +436,11 @@ class LGraph extends EventTarget {
     };
 
     if (do_not_catch_errors) {
-      for (let i = 0; i < num; i++) runOnce();
+      for (let i = 0; i < (optimized ? 1 : num); i++) runOnce();
       if (this.onAfterExecute) this.onAfterExecute();
     } else {
       try {
-        for (let i = 0; i < num; i++) runOnce();
+        for (let i = 0; i < (optimized ? 1 : num); i++) runOnce();
         if (this.onAfterExecute) this.onAfterExecute();
         this.errors_in_execution = false;
       } catch (err) {
@@ -388,120 +452,14 @@ class LGraph extends EventTarget {
     }
   }
 
-  /**
-   * Optimized run path — fuses Strategies 1, 3, 4, 5.
-   *
-   * Flow (matches the design doc's "组合执行流程"):
-   *   1. Iterate `_nodes_executable` in topological order (Strategy 4).
-   *   2. Flush _waiting_actions (deferred actions) — interface compat
-   *      with original litegraph's use_deferred_actions behavior.
-   *   3. For each node, check `_dirty` (Strategy 1). If false, skip —
-   *      the node's previous output is still valid. Order matters:
-   *      dirty check is cheaper than cache key computation, so we do
-   *      it first.
-   *   4. If dirty, check getCachedOutput() (Strategy 3). On hit,
-   *      applyCachedOutput() and skip onExecute entirely.
-   *   5. On cache miss, dispatch onExecute:
-   *        - synchronous for light nodes (via doExecute for action
-   *          tracking parity, or bare onExecute in catch-error path)
-   *        - async (Promise / Worker) for `_isHeavy` nodes (Strategy 5)
-   *   6. After successful sync execution: storeCachedOutput() + clearDirty().
-   *
-   * Interface compatibility:
-   *   - do_not_catch_errors=true  → doExecute() (action tracking + onAfterExecuteNode)
-   *   - do_not_catch_errors=false → onExecute() (bare, so try/catch sees the error)
-   *   - _waiting_actions flushed before each node when use_deferred_actions is on
-   *
-   * Note: the heavy-node async path falls back to sync execution if no
-   * asyncScheduler is attached. This keeps default single-threaded
-   * behavior intact while allowing hosts to plug in a Worker pool.
-   */
+  /** @deprecated use _runStepInternal(nodes, num, limit, do_not_catch_errors, false) */
+  _runStepClassic(nodes, num, limit, do_not_catch_errors) {
+    return this._runStepInternal(nodes, num, limit, do_not_catch_errors, false);
+  }
+
+  /** @deprecated use _runStepInternal(nodes, 1, limit, do_not_catch_errors, true) */
   _runStepOptimized(nodes, limit, do_not_catch_errors) {
-    const runOnce = () => {
-      for (let j = 0; j < limit; ++j) {
-        const node = nodes[j];
-        if (!node || node.mode !== LiteGraph.ALWAYS || !node.onExecute) continue;
-
-        // Flush deferred actions — interface compat with original litegraph.
-        // Must happen BEFORE the dirty check so pending actions are processed
-        // even if the node would otherwise be skipped.
-        if (
-          LiteGraph.use_deferred_actions &&
-          node._waiting_actions &&
-          node._waiting_actions.length
-        ) {
-          node.executePendingActions();
-        }
-
-        // Strategy 1 (Reactive Dirty Marking) — skip clean nodes.
-        // _alwaysDirty nodes (Timer, etc.) report dirty every step.
-        if (node.isDirty && !node.isDirty()) {
-          continue;
-        }
-
-        // Strategy 3 (Result Caching) — fast path on cache hit.
-        if (node.getCachedOutput) {
-          const cached = node.getCachedOutput();
-          if (cached != null) {
-            if (node.applyCachedOutput) node.applyCachedOutput();
-            // Even on cache hit we should fire onAfterExecuteNode for
-            // interface parity — but original litegraph only fires it
-            // inside doExecute, so we skip here too. Cache hit = no
-            // re-execution = no after-execute callback.
-            continue;
-          }
-        }
-
-        // Strategy 5 (Async Execution) — heavy nodes off the main thread.
-        if (node._isHeavy && this.asyncScheduler && !node._asyncPending) {
-          node._asyncPending = true;
-          this.asyncScheduler
-            .run(node)
-            .then(() => {
-              node._asyncPending = false;
-              if (node.storeCachedOutput) node.storeCachedOutput();
-              if (node.clearDirty) node.clearDirty();
-            })
-            .catch((err) => {
-              node._asyncPending = false;
-              if (LiteGraph.debug) {
-                console.error("[LiteGraph] async node failed", node, err);
-              }
-            });
-          continue;
-        }
-
-        // Synchronous execution (default).
-        // Match _runStepClassic: doExecute() in the no-catch path for
-        // action tracking + onAfterExecuteNode; bare onExecute() in the
-        // catch path so exceptions propagate to the try/catch wrapper.
-        if (do_not_catch_errors && node.doExecute) {
-          node.doExecute();
-        } else {
-          node.onExecute();
-        }
-        if (node.storeCachedOutput) node.storeCachedOutput();
-        if (node.clearDirty) node.clearDirty();
-      }
-      this.fixedtime += this.fixedtime_lapse;
-      if (this.onExecuteStep) this.onExecuteStep();
-    };
-
-    if (do_not_catch_errors) {
-      runOnce();
-      if (this.onAfterExecute) this.onAfterExecute();
-    } else {
-      try {
-        runOnce();
-        if (this.onAfterExecute) this.onAfterExecute();
-        this.errors_in_execution = false;
-      } catch (err) {
-        this.errors_in_execution = true;
-        if (LiteGraph.throw_errors) throw err;
-        if (LiteGraph.debug) console.log("Error during execution: " + err);
-        this.stop();
-      }
-    }
+    return this._runStepInternal(nodes, 1, limit, do_not_catch_errors, true);
   }
 
   /**
