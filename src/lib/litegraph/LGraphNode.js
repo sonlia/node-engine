@@ -1925,8 +1925,8 @@ class LGraphNode extends EventTarget {
    *   - generates unique action_call id
    *   - tracks graph.nodes_executing / nodes_executedAction
    *   - sets exec_version = graph.iteration
-   *   - sets execute_triggered = 2 (frame counter)
    *   - calls onAfterExecuteNode(param, options)
+   * (execute_triggered removed — was only for box-color flash animation)
    */
   doExecute(param, options) {
     options = options || {};
@@ -1956,7 +1956,8 @@ class LGraphNode extends EventTarget {
         if (this.graph) this.graph.nodes_executedAction[this.id] = options.action_call;
       }
     }
-    this.execute_triggered = 2;
+    // execute_triggered removed — was only used for box-color flash animation
+    // which has been removed from LGraphCanvas.drawNodeShape.
     if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
   }
 
@@ -1974,7 +1975,8 @@ class LGraphNode extends EventTarget {
    * Immediate action executor — restored original semantics.
    * (The deferred behavior lives in triggerSlot, NOT here.)
    * Generates action_call id, tracks graph.nodes_actioning /
-   * nodes_executedAction, sets action_triggered = 2, calls onAfterExecuteNode.
+   * nodes_executedAction, calls onAfterExecuteNode.
+   * (action_triggered removed — was only for box-color flash animation)
    */
   actionDo(action, param, options, action_slot) {
     options = options || {};
@@ -1994,7 +1996,7 @@ class LGraphNode extends EventTarget {
         if (this.graph) this.graph.nodes_executedAction[this.id] = options.action_call;
       }
     }
-    this.action_triggered = 2;
+    // action_triggered removed — was only used for box-color flash animation.
     if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
   }
 
@@ -2004,7 +2006,8 @@ class LGraphNode extends EventTarget {
    */
   trigger(action, param, options) {
     if (!this.outputs || !this.outputs.length) return;
-    if (this.graph) this.graph._last_trigger_time = LiteGraph.getTime();
+    // _last_trigger_time removed — was only used for the trigger-flash
+    // background redraw which has been removed from LGraphCanvas.draw().
     for (let i = 0; i < this.outputs.length; ++i) {
       const output = this.outputs[i];
       if (!output || output.type !== LiteGraph.EVENT) continue;
@@ -2035,7 +2038,7 @@ class LGraphNode extends EventTarget {
     const links = output.links;
     if (!links || !links.length) return;
 
-    if (this.graph) this.graph._last_trigger_time = LiteGraph.getTime();
+    // _last_trigger_time removed (see trigger() above).
 
     for (let k = 0; k < links.length; ++k) {
       const id = links[k];

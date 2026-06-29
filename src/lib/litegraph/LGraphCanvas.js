@@ -2405,10 +2405,7 @@ class LGraphCanvas {
         if (
             this.dirty_bgcanvas ||
             force_bgcanvas ||
-            this.always_render_background ||
-            (this.graph &&
-                this.graph._last_trigger_time &&
-                now - this.graph._last_trigger_time < 1000)
+            this.always_render_background
         ) {
             this.drawBackCanvas();
         }
@@ -3440,11 +3437,9 @@ class LGraphCanvas {
                 }
             }
             if (LiteGraph.node_box_coloured_when_on) {
-                colState = node.action_triggered
-                    ? "#FFF"
-                    : node.execute_triggered
-                    ? "#AAA"
-                    : colState;
+                // execute_triggered / action_triggered removed — the box
+                // color now only reflects the node's mode (always / never).
+                colState = colState;
             }
 
             // title box
@@ -3643,9 +3638,9 @@ class LGraphCanvas {
             ctx.globalAlpha = 1;
         }
 
-        // these counters help in conditioning drawing based on if the node has been executed or an action occurred
-        if (node.execute_triggered > 0) node.execute_triggered--;
-        if (node.action_triggered > 0) node.action_triggered--;
+        // execute_triggered / action_triggered decrement removed — these
+        // counters were only used for the box-color flash animation which
+        // has been removed. Nodes no longer carry execution-frame state.
     }
 
     // ==================== RENDERING: CONNECTIONS ====================
