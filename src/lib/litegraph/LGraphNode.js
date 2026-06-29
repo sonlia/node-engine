@@ -586,6 +586,24 @@ class LGraphNode extends EventTarget {
     if (!this.outputs) return;
     if (slot >= 0 && slot < this.outputs.length) {
       const output = this.outputs[slot];
+
+      // Strategy 1 guard — value-equality short-circuit.
+      // If the new value is identical to the existing output, skip the
+      // downstream dirty cascade entirely. This is THE critical optimization
+      // for static graphs: a Number(42) → Math(+) → Display chain only
+      // executes ONCE on the first frame, then every subsequent frame is
+      // a no-op because 42 === 42.
+      //
+      // For objects we use reference equality (===) — if the upstream
+      // produces a new instance every time, downstream re-executes (correct).
+      // If it reuses the same instance and mutates in place, the upstream
+      // must call markDirty() explicitly to signal the change.
+      const prev = output._data;
+      if (prev === data) return;
+      // NaN !== NaN, so handle NaN explicitly to avoid spurious dirty cascades
+      // when a math node outputs NaN every frame.
+      if (prev !== prev && data !== data) return;
+
       // Original keeps both an `_data` debug copy on the output slot AND
       // propagates the value to every live link's `.data` field. Downstream
       // nodes read it back via `getInputData` → `link.data`.
@@ -598,6 +616,50 @@ class LGraphNode extends EventTarget {
           }
         }
       }
+
+      // Strategy 1 (Reactive Dirty Marking): output mutation invalidates
+      // downstream caches so the next run recomputes them. This is reached
+      // only when the value actually changed (see equality check above),
+      // so spurious dirty cascades are eliminated.
+      this._markDownstreamDirty(slot);
+    }
+  }
+
+  /**
+   * Propagate dirty flag to all downstream consumers (Strategy 1+4 fusion).
+   * Internal helper used by setOutputData; does NOT mark this node itself
+   * dirty (the node just produced fresh output).
+   *
+   * Optimization: the per-slot filter is rarely useful in practice
+   * (most downstream consumers connect to one slot at a time), so we
+   * just walk the precomputed `_downstreamAdjacency` list and mark every
+   * direct successor dirty. If a downstream node is connected to multiple
+   * of our output slots, markDirty's idempotency check makes the
+   * duplicate call a no-op.
+   */
+  _markDownstreamDirty(slot) {
+    if (!this.graph) return;
+    // Strategy 1+4 fusion — fast path via precomputed adjacency.
+    if (this.graph._downstreamAdjacency) {
+      const successors = this.graph._downstreamAdjacency.get(this.id);
+      if (successors) {
+        for (let i = 0; i < successors.length; i++) {
+          const target = successors[i];
+          if (target && target.markDirty) target.markDirty();
+        }
+      }
+      return;
+    }
+    // Fallback: walk this specific output slot's links directly. Used
+    // only before the first rebuildTopology.
+    if (!this.outputs || !this.outputs[slot]) return;
+    const output = this.outputs[slot];
+    if (!output.links) return;
+    for (let i = 0; i < output.links.length; i++) {
+      const link = this.graph.links[output.links[i]];
+      if (!link) continue;
+      const target = this.graph.getNodeById(link.target_id);
+      if (target && target.markDirty) target.markDirty();
     }
   }
 
@@ -632,6 +694,15 @@ class LGraphNode extends EventTarget {
     // Pull fresh data from the upstream node.
     const node = this.graph.getNodeById(link.origin_id);
     if (!node) return link.data;
+
+    // Strategy 1 respect: if the upstream node is NOT dirty, its current
+    // output is already valid — no need to re-execute it. This prevents
+    // a force_update call from triggering redundant recomputation when
+    // the optimized path has already determined the upstream is clean.
+    if (node.isDirty && !node.isDirty()) {
+      return link.data;
+    }
+
     if (node.updateOutputData) node.updateOutputData(link.origin_slot);
     else if (node.onExecute) node.onExecute();
     return link.data;
