@@ -71,7 +71,17 @@ export class WorkerScheduler {
         // ---- register ----
         if (msg.op === "register") {
           try {
-            const fn = new Function("inputs", "properties", msg.src);
+            // Reconstruct the handler from its source string.
+            // msg.src is fn.toString() which may be:
+            //   "function (inputs, properties) { ... }"   (anonymous)
+            //   "function name(inputs, properties) { ... }" (named)
+            //   "(inputs, properties) => { ... }"          (arrow)
+            // We wrap in parentheses and eval so all three forms parse
+            // as a function expression. Using new Function("inputs",
+            // "properties", src) would fail because src already contains
+            // the full function header, producing an invalid nested
+            // declaration ("Function statements require a function name").
+            const fn = eval("(" + msg.src + ")");
             handlers[msg.type] = fn;
             self.postMessage({ op: "registered", type: msg.type });
           } catch (err) {

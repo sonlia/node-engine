@@ -181,23 +181,9 @@ class LGraphNode extends EventTarget {
       }
     }
 
-    // Restore widget values
-    if (this.widgets) {
-      for (let i = 0; i < this.widgets.length; ++i) {
-        const w = this.widgets[i];
-        if (!w) continue;
-        if (w.options && w.options.property && this.properties[w.options.property] !== undefined) {
-          w.value = JSON.parse(JSON.stringify(this.properties[w.options.property]));
-        }
-      }
-      if (info.widgets_values) {
-        for (let i = 0; i < info.widgets_values.length; ++i) {
-          if (this.widgets[i]) {
-            this.widgets[i].value = info.widgets_values[i];
-          }
-        }
-      }
-    }
+    // Widget system removed — widgets_values from legacy serializations
+    // are silently ignored. Properties (restored above) are the single
+    // source of truth for node parameters now.
 
     // Strategy 1 (Reactive Dirty Marking): freshly configured nodes start
     // dirty so the first run after a load/serialize cycle recomputes
@@ -245,12 +231,9 @@ class LGraphNode extends EventTarget {
       o.properties = cloneObject(this.properties);
     }
 
-    if (this.widgets && this.serialize_widgets) {
-      o.widgets_values = [];
-      for (let i = 0; i < this.widgets.length; ++i) {
-        o.widgets_values[i] = this.widgets[i] ? this.widgets[i].value : null;
-      }
-    }
+    // Widget system removed — serialize no longer writes widgets_values.
+    // Properties (serialized above via `o.properties = this.properties`)
+    // are the single source of truth.
 
     if (!o.type) {
       o.type = this.constructor.type;
@@ -329,17 +312,7 @@ class LGraphNode extends EventTarget {
         this.properties[name] = prevValue;
       }
     }
-    // Keep any bound widget in sync with the new property value.
-    if (this.widgets) {
-      for (let i = 0; i < this.widgets.length; ++i) {
-        const w = this.widgets[i];
-        if (!w) continue;
-        if (w.options && w.options.property === name) {
-          w.value = value;
-          break;
-        }
-      }
-    }
+    // Widget system removed — no widget sync needed.
     // Strategy 1 (Reactive Dirty Marking): a parameter change invalidates
     // this node's cache and propagates dirty downstream so the next run
     // only recomputes affected branches.
@@ -1706,31 +1679,15 @@ class LGraphNode extends EventTarget {
 
     size[0] = Math.max(input_width + output_width + 10, title_width);
     size[0] = Math.max(size[0], LiteGraph.NODE_WIDTH);
-    if (this.widgets && this.widgets.length) {
-      size[0] = Math.max(size[0], LiteGraph.NODE_WIDTH * 1.5);
-    }
+    // Widget system removed — no widget width inflation.
 
     size[1] =
       (this.constructor.slot_start_y || 0) +
       rows * LiteGraph.NODE_SLOT_HEIGHT;
 
-    let widgets_height = 0;
-    if (this.widgets && this.widgets.length) {
-      for (let i = 0, l = this.widgets.length; i < l; ++i) {
-        if (this.widgets[i].computeSize)
-          widgets_height += this.widgets[i].computeSize(size[0])[1] + 4;
-        else widgets_height += LiteGraph.NODE_WIDGET_HEIGHT + 4;
-      }
-      widgets_height += 8;
-    }
-
-    if (this.widgets_up) {
-      size[1] = Math.max(size[1], widgets_height);
-    } else if (this.widgets_start_y != null) {
-      size[1] = Math.max(size[1], widgets_height + this.widgets_start_y);
-    } else {
-      size[1] += widgets_height;
-    }
+    // Widget system removed — no widget height calculation.
+    // (Previous code added widgets_height based on this.widgets[].computeSize;
+    //  with widgets gone, node height is purely slot-driven.)
 
     if (this.constructor.min_height && size[1] < this.constructor.min_height) {
       size[1] = this.constructor.min_height;
@@ -1857,9 +1814,23 @@ class LGraphNode extends EventTarget {
    *   - copies w.options.y to w.y
    *   - lowercases widget type
    */
+  /**
+   * addWidget — DEPRECATED, kept as a no-op stub for interface compatibility.
+   *
+   * The widget system (canvas-rendered input controls on nodes) has been
+   * removed. Nodes should expose editable parameters via addProperty()
+   * instead; hosts render property editors through their own UI (e.g. the
+   * PropertyEditor panel in page.tsx).
+   *
+   * This stub silently absorbs the call so legacy node constructors that
+   * call `this.addWidget(...)` don't throw. The `value` argument is still
+   * applied to the bound property (if `options.property` is set) so the
+   * initial value isn't lost. The callback is never invoked — hosts must
+   * use setProperty() to mutate properties going forward.
+   */
   addWidget(type, name, value, callback, options) {
-    if (!this.widgets) this.widgets = [];
-
+    // Normalize options (same as original so the property-binding branch
+    // below doesn't need to handle all the legacy calling conventions).
     if (!options && callback && callback.constructor === Object) {
       options = callback;
       callback = null;
@@ -1872,38 +1843,25 @@ class LGraphNode extends EventTarget {
       options.property = callback;
       callback = null;
     }
-    if (callback && callback.constructor !== Function) {
-      console.warn("addWidget: callback must be a function");
-      callback = null;
+    // Apply the initial value to the bound property so nodes that rely on
+    // addWidget for default-value setup still work.
+    if (options && options.property && this.properties) {
+      if (this.properties[options.property] === undefined) {
+        this.properties[options.property] = value;
+      }
     }
-
-    const w = {
-      type: type.toLowerCase(),
+    // Return a stub object so callers that chain off the return value
+    // (e.g. `const w = node.addWidget(...); w.something = x`) don't crash.
+    return {
+      type: type.toLowerCase ? type.toLowerCase() : type,
       name: name,
       value: value,
-      callback: callback,
       options: options || {},
     };
-
-    if (w.options.y !== undefined) {
-      w.y = w.options.y;
-    }
-
-    if (!callback && !w.options.callback && !w.options.property) {
-      console.warn("LiteGraph addWidget(...) without a callback or property assigned");
-    }
-    if (type === "combo" && !w.options.values) {
-      throw "LiteGraph addWidget('combo',...) requires to pass values in options: { values:['red','blue'] }";
-    }
-
-    this.widgets.push(w);
-    this.setSize(this.computeSize());
-    return w;
   }
 
+  /** addCustomWidget — DEPRECATED no-op stub. See addWidget docs. */
   addCustomWidget(customWidget) {
-    if (!this.widgets) this.widgets = [];
-    this.widgets.push(customWidget);
     return customWidget;
   }
 
