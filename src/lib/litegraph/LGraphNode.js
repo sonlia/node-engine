@@ -1366,8 +1366,11 @@ class LGraphNode extends EventTarget {
         if (!output || !output.links || output.links.length === 0) return false;
 
         // Find & remove this link from the output's links array
+        // BUGFIX: `l` was not declared (only `i` was), causing
+        // "l is not defined" in strict mode after minification.
         let i;
-        for (i = 0, l = output.links.length; i < l; i++) {
+        const linkCount = output.links.length;
+        for (i = 0; i < linkCount; i++) {
           if (output.links[i] === link_id) {
             output.links.splice(i, 1);
             break;

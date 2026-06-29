@@ -3190,12 +3190,15 @@ class LGraphCanvas {
                 }
                 ctx.fillStyle = "#686";
                 ctx.beginPath();
+                // BUGFIX: use input_slot (not `slot` which is out of scope
+                // after the for loop above). This caused "slot is not defined"
+                // when collapsing a node with a connected input.
                 if (
-                    slot.type === LiteGraph.EVENT ||
-                    slot.shape === LiteGraph.BOX_SHAPE
+                    input_slot.type === LiteGraph.EVENT ||
+                    input_slot.shape === LiteGraph.BOX_SHAPE
                 ) {
                     ctx.rect(x - 7 + 0.5, y - 4, 14, 8);
-                } else if (slot.shape === LiteGraph.ARROW_SHAPE) {
+                } else if (input_slot.shape === LiteGraph.ARROW_SHAPE) {
                     ctx.moveTo(x + 8, y);
                     ctx.lineTo(x - 4, y - 4);
                     ctx.lineTo(x - 4, y + 4);
@@ -3216,12 +3219,13 @@ class LGraphCanvas {
                 ctx.fillStyle = "#686";
                 ctx.strokeStyle = "black";
                 ctx.beginPath();
+                // BUGFIX: use output_slot (not `slot` which is out of scope).
                 if (
-                    slot.type === LiteGraph.EVENT ||
-                    slot.shape === LiteGraph.BOX_SHAPE
+                    output_slot.type === LiteGraph.EVENT ||
+                    output_slot.shape === LiteGraph.BOX_SHAPE
                 ) {
                     ctx.rect(x - 7 + 0.5, y - 4, 14, 8);
-                } else if (slot.shape === LiteGraph.ARROW_SHAPE) {
+                } else if (output_slot.shape === LiteGraph.ARROW_SHAPE) {
                     ctx.moveTo(x + 6, y);
                     ctx.lineTo(x - 6, y - 4);
                     ctx.lineTo(x - 6, y + 4);
