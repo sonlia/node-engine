@@ -813,18 +813,14 @@ class LGraphCanvas {
                         e.canvasY - node.pos[1],
                     ];
 
-                    // Collapse box click (single OR double) → toggle collapse.
-                    // This check MUST come before the double-click panel
-                    // handler below, otherwise double-clicking the title
-                    // box opens a panel instead of toggling collapse.
-                    // Uses the unified isOverNodeBox so the hit region
-                    // always matches the drawn box.
+                    // Collapse box: mousedown only marks it so mouseup can
+                    // toggle. We do NOT collapse here — if we did, a fast
+                    // click would collapse on mousedown AND collapse again
+                    // (uncollapse) on mouseup, causing a visible flicker.
+                    // The actual collapse toggle happens in processMouseUp
+                    // when click_time < 300. We still set skip_action so
+                    // the double-click panel handler below doesn't fire.
                     if (this.isOverNodeBox(node, e.canvasX, e.canvasY)) {
-                        node.graph.beforeChange();
-                        node.collapse();
-                        node.graph.afterChange();
-                        this.dirty_canvas = true;
-                        this.dirty_bgcanvas = true;
                         skip_action = true;
                     }
 
