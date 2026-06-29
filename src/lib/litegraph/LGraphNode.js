@@ -14,8 +14,28 @@
 import { LiteGraph } from "./LiteGraph.js";
 import { cloneObject, uuidv4, isInsideRectangle } from "./utils.js";
 
-class LGraphNode {
+// ============================================================================
+// Strategy 3 (Result Caching) — module-private WeakMaps
+// ----------------------------------------------------------------------------
+// `_objectIdMap` gives each object a stable numeric id WITHOUT mutating the
+// object itself. This avoids polluting user data, breaking structured-clone
+// transfer to Web Workers (Strategy 5), and failing on frozen/sealed objects.
+// The WeakMap lets the id be GC'd when the object is no longer referenced.
+// ============================================================================
+const _objectIdMap = new WeakMap();
+let _nextObjectId = 1;
+function getObjectId(obj) {
+  let id = _objectIdMap.get(obj);
+  if (id === undefined) {
+    id = _nextObjectId++;
+    _objectIdMap.set(obj, id);
+  }
+  return id;
+}
+
+class LGraphNode extends EventTarget {
   constructor(title) {
+    super();
     this.title = title || "Unnamed";
     this.size = [LiteGraph.NODE_WIDTH, 60];
     this.graph = null;
@@ -39,6 +59,30 @@ class LGraphNode {
     // Rendering/execution state
     this._shape = null;
     this._waiting_actions = [];
+
+    // ====================================================================
+    // Execution Optimization State (fusion of strategies 1/3/5)
+    // --------------------------------------------------------------------
+    // Strategy 1 (Reactive Dirty Marking, Polygonjs-style):
+    //   `_dirty` starts true so the first run computes everything.
+    //   markDirty() propagates downstream so unchanged branches are skipped.
+    //
+    // Strategy 3 (Result Caching / Memoization — WeakMap-backed):
+    //   Cache entries live in `graph._cacheStore` (WeakMap<LGraphNode,
+    //   {key, output}>) so removed nodes' entries auto-GC.
+    //
+    // Strategy 5 (Async Execution for heavy nodes):
+    //   `_isHeavy` flags nodes for Worker dispatch (see WorkerScheduler.js).
+    //
+    // `_alwaysDirty`: for nodes whose output changes every step regardless
+    //   of input (e.g. Timer reading graph.globaltime). Bypasses the dirty
+    //   skip so the node always re-executes, but its downstream still gets
+    //   the setOutputData equality check to avoid spurious dirty cascades.
+    // ====================================================================
+    this._dirty = true;
+    this._isHeavy = false;
+    this._asyncPending = false;
+    this._alwaysDirty = false;
   }
 
   // ===================== POSITION GETTER/SETTER =====================
@@ -154,6 +198,12 @@ class LGraphNode {
         }
       }
     }
+
+    // Strategy 1 (Reactive Dirty Marking): freshly configured nodes start
+    // dirty so the first run after a load/serialize cycle recomputes
+    // everything from scratch. Without this, a deserialized graph could
+    // falsely report cached values as still valid.
+    this._dirty = true;
 
     if (this.onConfigure) {
       this.onConfigure(info);
@@ -290,6 +340,10 @@ class LGraphNode {
         }
       }
     }
+    // Strategy 1 (Reactive Dirty Marking): a parameter change invalidates
+    // this node's cache and propagates dirty downstream so the next run
+    // only recomputes affected branches.
+    this.markDirty();
   }
 
   addProperty(name, defaultValue, type, extraInfo) {
@@ -340,6 +394,190 @@ class LGraphNode {
       info.type = "enum";
     }
     return info;
+  }
+
+  // ===================== EXECUTION OPTIMIZATION =====================
+  // Fuses three runtime strategies (see design doc):
+  //   - Strategy 1: Reactive Dirty Marking (Polygonjs)
+  //   - Strategy 2: Lazy Execution (Rete fetch())         — see LGraph.runTarget
+  //   - Strategy 3: Result Caching / Memoization          — see computeCacheKey
+  //   - Strategy 5: Async Execution for heavy nodes       — see _isHeavy
+  //
+  // Backward compatibility: every method below is a no-op for nodes that
+  // never opted in. Old nodes have no _dirty / cache fields and runStep
+  // will simply call onExecute() every frame as before.
+
+  /**
+   * Mark this node as dirty and propagate the dirty flag to all downstream
+   * consumers (Strategy 1 + Strategy 4 fusion).
+   *
+   * Propagation path:
+   *   - If the graph has a precomputed `_downstreamAdjacency` (built by
+   *     LGraph.rebuildTopology, Strategy 4), walk that array directly.
+   *     Cost: O(direct_successors) with no link-object dereferences.
+   *   - Otherwise (graph not yet topologically analyzed, e.g. during
+   *     initial construction before the first connectionChange), fall
+   *     back to walking this.outputs[i].links[j] and looking up each
+   *     target node.
+   *
+   * Idempotent — if the node is already dirty we stop propagation early
+   * to avoid recomputing the same closure twice.
+   *
+   * Side effects:
+   *   - clears cached output (Strategy 3 cache invalidation — WeakMap entry)
+   */
+  markDirty() {
+    // Already dirty — skip redundant downstream propagation.
+    if (this._dirty) return;
+    this._dirty = true;
+    // Strategy 3 — clear WeakMap cache entry. WeakMap.delete is O(1) and
+    // safe to call even if no entry exists. When the node is later GC'd,
+    // any lingering entry is collected automatically — no manual sweep.
+    if (this.graph && this.graph._cacheStore) {
+      this.graph._cacheStore.delete(this);
+    }
+
+    // Strategy 1+4 fusion — propagate via precomputed adjacency list
+    // when available. This is the hot path after the first
+    // connectionChange / rebuildTopology.
+    if (this.graph && this.graph._downstreamAdjacency) {
+      const successors = this.graph._downstreamAdjacency.get(this.id);
+      if (successors) {
+        for (let i = 0; i < successors.length; i++) {
+          const target = successors[i];
+          if (target && target.markDirty) target.markDirty();
+        }
+      }
+    } else if (this.outputs && this.graph) {
+      // Fallback path: graph hasn't been topologically analyzed yet.
+      for (let i = 0; i < this.outputs.length; i++) {
+        const output = this.outputs[i];
+        if (!output || !output.links) continue;
+        for (let j = 0; j < output.links.length; j++) {
+          const link = this.graph.links[output.links[j]];
+          if (!link) continue;
+          const target = this.graph.getNodeById(link.target_id);
+          if (target && target.markDirty) target.markDirty();
+        }
+      }
+    }
+  }
+
+  /** Returns true if the node needs to recompute (Strategy 1 gate). */
+  isDirty() {
+    // _alwaysDirty nodes (Timer, etc.) always report dirty so the
+    // optimized run loop re-executes them every step.
+    if (this._alwaysDirty) return true;
+    return this._dirty !== false;
+  }
+
+  /** Mark the node clean after a successful onExecute (Strategy 1 close). */
+  clearDirty() {
+    this._dirty = false;
+  }
+
+  /**
+   * Compute a cache key from the node's input signature (Strategy 3).
+   * Combines serialized properties + upstream output data references.
+   * Returns null when inputs are not yet available (forces execution).
+   *
+   * For _alwaysDirty nodes, returns null so the cache never hits —
+   * the output genuinely changes every step.
+   */
+  computeCacheKey() {
+    if (this._alwaysDirty) return null;
+    if (!this.inputs) return null;
+    const parts = [];
+    if (this.properties) {
+      try {
+        parts.push(JSON.stringify(this.properties));
+      } catch (e) {
+        return null;
+      }
+    }
+    for (let i = 0; i < this.inputs.length; i++) {
+      const input = this.inputs[i];
+      if (!input || input.link == null) {
+        parts.push("null");
+        continue;
+      }
+      const link = this.graph ? this.graph.links[input.link] : null;
+      if (!link) {
+        parts.push("null");
+        continue;
+      }
+      const data = link.data;
+      if (data == null) {
+        parts.push("null");
+      } else if (typeof data === "object") {
+        // Object identity cache via module-private WeakMap — no data
+        // mutation. Invalidates when upstream produces a new instance.
+        parts.push(`obj:${data.constructor.name}:${getObjectId(data)}`);
+      } else {
+        parts.push(`${typeof data}:${String(data)}`);
+      }
+    }
+    return parts.join("|");
+  }
+
+  /**
+   * Return cached output if the current input signature matches the
+   * stored cache key (Strategy 3 fast path). Returns null on miss.
+   */
+  getCachedOutput() {
+    if (!this.graph || !this.graph._cacheStore) return null;
+    const entry = this.graph._cacheStore.get(this);
+    if (!entry) return null;
+    const key = this.computeCacheKey();
+    if (key == null || key !== entry.key) return null;
+    return entry.output;
+  }
+
+  /**
+   * Store output after a successful onExecute (Strategy 3 store).
+   * Writes to the graph's WeakMap cache (lazily created on first use).
+   */
+  storeCachedOutput() {
+    if (!this.graph) return;
+    if (!this.graph._cacheStore) {
+      this.graph._cacheStore = new WeakMap();
+    }
+    const key = this.computeCacheKey();
+    if (key == null) {
+      // Un-cacheable node — explicitly delete any prior entry.
+      this.graph._cacheStore.delete(this);
+      return;
+    }
+    const snapshot = [];
+    if (this.outputs) {
+      for (let i = 0; i < this.outputs.length; i++) {
+        const output = this.outputs[i];
+        snapshot.push(output ? output._data : undefined);
+      }
+    }
+    this.graph._cacheStore.set(this, { key, output: snapshot });
+  }
+
+  /**
+   * Apply cached outputs back to the output slots (Strategy 3 restore).
+   * Called by runOptimized when a cache hit occurs so downstream nodes
+   * see the same data values as if onExecute had run.
+   */
+  applyCachedOutput() {
+    if (!this.graph || !this.graph._cacheStore) return;
+    const entry = this.graph._cacheStore.get(this);
+    if (!entry || !entry.output || !this.outputs) return;
+    for (let i = 0; i < this.outputs.length && i < entry.output.length; i++) {
+      if (this.outputs[i]) {
+        this.outputs[i]._data = entry.output[i];
+        if (this.outputs[i].links && this.graph) {
+          for (let j = 0; j < this.outputs[i].links.length; j++) {
+            const link = this.graph.links[this.outputs[i].links[j]];
+            if (link) link.data = entry.output[i];
+          }
+        }
+      }
+    }
   }
 
   // ===================== DATA FLOW =====================
@@ -822,6 +1060,12 @@ class LGraphNode {
     this.graph.afterChange();
     this.graph.connectionChange(this, link_info);
 
+    // Strategy 1 (Reactive Dirty Marking): a new connection means the
+    // target node now has fresh upstream data to consume. Mark it dirty
+    // so the next run actually pulls the value through. The source node
+    // is NOT marked dirty — its output hasn't changed.
+    if (target_node && target_node.markDirty) target_node.markDirty();
+
     return link_info;
   }
 
@@ -1020,6 +1264,8 @@ class LGraphNode {
               link_info.target_slot
             );
           }
+          // Strategy 1: mark each affected downstream node dirty.
+          if (target.markDirty) target.markDirty();
         }
         delete this.graph.links[link_id];
         if (this.onConnectionsChange) {
@@ -1039,6 +1285,8 @@ class LGraphNode {
 
     this.setDirtyCanvas(false, true);
     this.graph.connectionChange(this);
+    // Strategy 1: single-target branch — mark that target dirty.
+    if (target_node && target_node.markDirty) target_node.markDirty();
     return true;
   }
 
@@ -1106,6 +1354,10 @@ class LGraphNode {
 
     this.setDirtyCanvas(false, true);
     if (this.graph) this.graph.connectionChange(this);
+    // Strategy 1 (Reactive Dirty Marking): this node lost an upstream
+    // input — mark itself dirty so onExecute runs with the new (null)
+    // input state on the next step.
+    if (this.markDirty) this.markDirty();
     return true;
   }
 
