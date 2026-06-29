@@ -19,7 +19,7 @@ import { cloneObject, getTime, uuidv4 } from "./utils.js";
 import { LGraphGroup } from "./LGraphGroup.js";
 import { LGraphNode } from "./LGraphNode.js";
 
-class LGraph {
+class LGraph extends EventTarget {
   // ===================== STATIC PROPERTIES =====================
 
   static STATUS_STOPPED = 1;
@@ -31,6 +31,7 @@ class LGraph {
   // ===================== CONSTRUCTOR =====================
 
   constructor(o) {
+    super();
     if (LiteGraph.debug) {
       console.log("Graph created");
     }
@@ -110,6 +111,34 @@ class LGraph {
     this.nodes_executing = [];
     this.nodes_actioning = [];
     this.nodes_executedAction = [];
+
+    // ====================================================================
+    // Execution Optimization infrastructure (Strategies 3 / 4 / 5).
+    // --------------------------------------------------------------------
+    // _cacheStore: WeakMap<LGraphNode, {key, output}> (Strategy 3).
+    //   Lazily created on first storeCachedOutput() call. When a node is
+    //   dropped, its entry auto-GCs — no manual sweep. Centralized on the
+    //   graph so `clear()` just reassigns to null and all prior entries
+    //   become eligible for collection.
+    //
+    // _downstreamAdjacency: Map<nodeId, LGraphNode[]> (Strategy 4).
+    //   Precomputed direct-successor list per node. Built by
+    //   rebuildTopology() alongside the topological order. Powers:
+    //     • LGraphNode.markDirty() — Strategy 1+4 fusion, fast propagation
+    //     • LGraph.runTarget()    — Strategy 2+4 fusion, lazy chain walk
+    //
+    // asyncScheduler: AsyncScheduler instance (Strategy 5).
+    //   Hosts assign `graph.asyncScheduler = new WorkerScheduler({...})`
+    //   to enable heavy-node offloading. When null, heavy nodes fall
+    //   back to synchronous execution in _runStepOptimized.
+    //
+    // config.optimized_execution: bool (default false for backward compat).
+    //   When true, runStep dispatches to _runStepOptimized (Strategy 1+3+4+5
+    //   fusion). When false, falls back to classic full-traversal.
+    // ====================================================================
+    this._cacheStore = null;
+    this._downstreamAdjacency = null;
+    this.asyncScheduler = null;
 
     //subgraph_data
     this.inputs = {};
@@ -241,7 +270,20 @@ class LGraph {
   }
 
   /**
-   * Run N steps (cycles) of the graph
+   * Run N steps (cycles) of the graph.
+   *
+   * Backward-compatible entry point. Behavior depends on
+   * `this.config.optimized_execution`:
+   *
+   *   - falsy (default): classic full-graph traversal — every node with
+   *     mode=ALWAYS and an onExecute() runs every step. Identical to the
+   *     original LiteGraph semantics; old nodes work unchanged.
+   *
+   *   - true: Strategy 1+3+4+5 fused path. Iterates `_nodes_executable`
+   *     (topological order, Strategy 4), skips clean nodes (Strategy 1),
+   *     short-circuits via getCachedOutput() on cache hit (Strategy 3),
+   *     and dispatches `_isHeavy` nodes to asyncScheduler (Strategy 5).
+   *
    * @method runStep
    * @param {number} num number of steps to run, default is 1
    * @param {Boolean} do_not_catch_errors [optional] if you want to try/catch errors
@@ -253,10 +295,10 @@ class LGraph {
     const start = getTime();
     this.globaltime = 0.001 * (start - this.starttime);
 
-    //not optimal: executes possible pending actions in node, problem is it is not optimized
-    //it is done here as if it was done in the later loop it wont be called in the node missed the onExecute
-
-    //from now on it will iterate only on executable nodes which is faster
+    // Strategy 4 (Topological Sort Pre-computation): `_nodes_executable`
+    // is rebuilt by updateExecutionOrder() whenever the connection graph
+    // changes (see connectionChange). Falling back to `_nodes` keeps
+    // things working during initial setup before the first sort.
     const nodes = this._nodes_executable
       ? this._nodes_executable
       : this._nodes;
@@ -266,70 +308,12 @@ class LGraph {
 
     limit = limit || nodes.length;
 
-    if (do_not_catch_errors) {
-      //iterations
-      for (let i = 0; i < num; i++) {
-        for (let j = 0; j < limit; ++j) {
-          const node = nodes[j];
-          if (
-            LiteGraph.use_deferred_actions &&
-            node._waiting_actions &&
-            node._waiting_actions.length
-          )
-            node.executePendingActions();
-          if (node.mode === LiteGraph.ALWAYS && node.onExecute) {
-            //wrap node.onExecute();
-            node.doExecute();
-          }
-        }
-
-        this.fixedtime += this.fixedtime_lapse;
-        if (this.onExecuteStep) {
-          this.onExecuteStep();
-        }
-      }
-
-      if (this.onAfterExecute) {
-        this.onAfterExecute();
-      }
+    // Dispatch to the optimized path when enabled; otherwise run the
+    // classic full-traversal loop for backward compatibility.
+    if (this.config && this.config.optimized_execution) {
+      this._runStepOptimized(nodes, limit, do_not_catch_errors);
     } else {
-      //catch errors
-      try {
-        //iterations
-        for (let i = 0; i < num; i++) {
-          for (let j = 0; j < limit; ++j) {
-            const node = nodes[j];
-            if (
-              LiteGraph.use_deferred_actions &&
-              node._waiting_actions &&
-              node._waiting_actions.length
-            )
-              node.executePendingActions();
-            if (node.mode === LiteGraph.ALWAYS && node.onExecute) {
-              node.onExecute();
-            }
-          }
-
-          this.fixedtime += this.fixedtime_lapse;
-          if (this.onExecuteStep) {
-            this.onExecuteStep();
-          }
-        }
-
-        if (this.onAfterExecute) {
-          this.onAfterExecute();
-        }
-        this.errors_in_execution = false;
-      } catch (err) {
-        this.errors_in_execution = true;
-        if (LiteGraph.throw_errors) {
-          throw err;
-        }
-        if (LiteGraph.debug) {
-          console.log("Error during execution: " + err);
-        }
-        this.stop();
-      }
+      this._runStepClassic(nodes, num, limit, do_not_catch_errors);
     }
 
     const now = getTime();
@@ -345,6 +329,304 @@ class LGraph {
     this.nodes_executing = [];
     this.nodes_actioning = [];
     this.nodes_executedAction = [];
+  }
+
+  /**
+   * Classic full-graph traversal — original LiteGraph behavior.
+   * Every node with mode=ALWAYS and onExecute() runs every step,
+   * regardless of dirty state or cache.
+   */
+  _runStepClassic(nodes, num, limit, do_not_catch_errors) {
+    const runOnce = () => {
+      for (let j = 0; j < limit; ++j) {
+        const node = nodes[j];
+        if (
+          LiteGraph.use_deferred_actions &&
+          node._waiting_actions &&
+          node._waiting_actions.length
+        ) {
+          node.executePendingActions();
+        }
+        if (node.mode === LiteGraph.ALWAYS && node.onExecute) {
+          node.onExecute();
+        }
+      }
+      this.fixedtime += this.fixedtime_lapse;
+      if (this.onExecuteStep) this.onExecuteStep();
+    };
+
+    if (do_not_catch_errors) {
+      for (let i = 0; i < num; i++) runOnce();
+      if (this.onAfterExecute) this.onAfterExecute();
+    } else {
+      try {
+        for (let i = 0; i < num; i++) runOnce();
+        if (this.onAfterExecute) this.onAfterExecute();
+        this.errors_in_execution = false;
+      } catch (err) {
+        this.errors_in_execution = true;
+        if (LiteGraph.throw_errors) throw err;
+        if (LiteGraph.debug) console.log("Error during execution: " + err);
+        this.stop();
+      }
+    }
+  }
+
+  /**
+   * Optimized run path — fuses Strategies 1, 3, 4, 5.
+   *
+   * Flow (matches the design doc's "组合执行流程"):
+   *   1. Iterate `_nodes_executable` in topological order (Strategy 4).
+   *   2. For each node, check `_dirty` (Strategy 1). If false, skip —
+   *      the node's previous output is still valid. Order matters:
+   *      dirty check is cheaper than cache key computation, so we do
+   *      it first.
+   *   3. If dirty, check getCachedOutput() (Strategy 3). On hit,
+   *      applyCachedOutput() and skip onExecute entirely.
+   *   4. On cache miss, dispatch onExecute:
+   *        - synchronous for light nodes
+   *        - async (Promise / Worker) for `_isHeavy` nodes (Strategy 5)
+   *   5. After successful sync execution: storeCachedOutput() + clearDirty().
+   *
+   * Note: the heavy-node async path falls back to sync execution if no
+   * asyncScheduler is attached. This keeps default single-threaded
+   * behavior intact while allowing hosts to plug in a Worker pool.
+   */
+  _runStepOptimized(nodes, limit, do_not_catch_errors) {
+    const runOnce = () => {
+      for (let j = 0; j < limit; ++j) {
+        const node = nodes[j];
+        if (!node || node.mode !== LiteGraph.ALWAYS || !node.onExecute) continue;
+
+        // Strategy 1 (Reactive Dirty Marking) — skip clean nodes.
+        // _alwaysDirty nodes (Timer, etc.) report dirty every step.
+        if (node.isDirty && !node.isDirty()) {
+          continue;
+        }
+
+        // Strategy 3 (Result Caching) — fast path on cache hit.
+        if (node.getCachedOutput) {
+          const cached = node.getCachedOutput();
+          if (cached != null) {
+            if (node.applyCachedOutput) node.applyCachedOutput();
+            continue;
+          }
+        }
+
+        // Strategy 5 (Async Execution) — heavy nodes off the main thread.
+        if (node._isHeavy && this.asyncScheduler && !node._asyncPending) {
+          node._asyncPending = true;
+          this.asyncScheduler
+            .run(node)
+            .then(() => {
+              node._asyncPending = false;
+              if (node.storeCachedOutput) node.storeCachedOutput();
+              if (node.clearDirty) node.clearDirty();
+            })
+            .catch((err) => {
+              node._asyncPending = false;
+              if (LiteGraph.debug) {
+                console.error("[LiteGraph] async node failed", node, err);
+              }
+            });
+          continue;
+        }
+
+        // Synchronous execution (default).
+        node.onExecute();
+        if (node.storeCachedOutput) node.storeCachedOutput();
+        if (node.clearDirty) node.clearDirty();
+      }
+      this.fixedtime += this.fixedtime_lapse;
+      if (this.onExecuteStep) this.onExecuteStep();
+    };
+
+    if (do_not_catch_errors) {
+      runOnce();
+      if (this.onAfterExecute) this.onAfterExecute();
+    } else {
+      try {
+        runOnce();
+        if (this.onAfterExecute) this.onAfterExecute();
+        this.errors_in_execution = false;
+      } catch (err) {
+        this.errors_in_execution = true;
+        if (LiteGraph.throw_errors) throw err;
+        if (LiteGraph.debug) console.log("Error during execution: " + err);
+        this.stop();
+      }
+    }
+  }
+
+  /**
+   * Public alias for the optimized run path (Strategy fusion entry point).
+   * Equivalent to calling runStep() with config.optimized_execution=true,
+   * but makes intent explicit at call sites and works even if the host
+   * forgot to flip the config flag.
+   */
+  runOptimized(num, do_not_catch_errors) {
+    const prev = this.config && this.config.optimized_execution;
+    if (!this.config) this.config = {};
+    this.config.optimized_execution = true;
+    try {
+      this.runStep(num || 1, do_not_catch_errors);
+    } finally {
+      // Restore previous setting so callers don't accidentally flip the
+      // global mode just by calling runOptimized once.
+      if (prev === undefined) delete this.config.optimized_execution;
+      else this.config.optimized_execution = prev;
+    }
+  }
+
+  /**
+   * Lazy / on-demand execution (Strategy 2 + Strategy 4 fusion).
+   *
+   * Walks the dependency chain backwards from `targetNode`, ensuring
+   * every ancestor has fresh output before executing the target.
+   * Combined with the cache (Strategy 3) and dirty flag (Strategy 1),
+   * only the chain feeding the requested output recomputes.
+   *
+   * Strategy 2+4 fusion:
+   *   - When `_downstreamAdjacency` is available, use
+   *     _getAncestorsViaAdjacency() — O(ancestors) BFS with no per-link
+   *     lookup. Falls back to getAncestors() during early bootstrap.
+   *   - The chain is already in topological order (parents before
+   *     children) so each input is fresh by the time its consumer runs.
+   */
+  runTarget(targetNode, do_not_catch_errors) {
+    if (!targetNode) return;
+    if (typeof targetNode === "string" || typeof targetNode === "number") {
+      targetNode = this.getNodeById(targetNode);
+    }
+    if (!targetNode) return;
+
+    let chain;
+    if (this._downstreamAdjacency) {
+      chain = this._getAncestorsViaAdjacency(targetNode);
+    } else {
+      const ancestors = this.getAncestors(targetNode);
+      chain = ancestors.concat([targetNode]);
+    }
+
+    const exec = (node) => {
+      if (!node || !node.onExecute) return;
+      // Strategy 1 — skip clean nodes.
+      if (node.isDirty && !node.isDirty()) return;
+      // Strategy 3 — cache hit short-circuits the subtree.
+      if (node.getCachedOutput) {
+        const cached = node.getCachedOutput();
+        if (cached != null) {
+          if (node.applyCachedOutput) node.applyCachedOutput();
+          return;
+        }
+      }
+      node.onExecute();
+      if (node.storeCachedOutput) node.storeCachedOutput();
+      if (node.clearDirty) node.clearDirty();
+    };
+
+    if (do_not_catch_errors) {
+      for (let i = 0; i < chain.length; i++) exec(chain[i]);
+      if (this.onAfterExecute) this.onAfterExecute();
+    } else {
+      try {
+        for (let i = 0; i < chain.length; i++) exec(chain[i]);
+        if (this.onAfterExecute) this.onAfterExecute();
+        this.errors_in_execution = false;
+      } catch (err) {
+        this.errors_in_execution = true;
+        if (LiteGraph.throw_errors) throw err;
+        this.stop();
+      }
+    }
+  }
+
+  /**
+   * Build the ancestor chain for `targetNode` by BFS from the target's
+   * inputs upward (Strategy 2+4 fusion). Returns an array in topological
+   * order (parents-first), ending with `targetNode` itself.
+   * @private
+   */
+  _getAncestorsViaAdjacency(targetNode) {
+    const visited = new Set();
+    const order = [];
+    const queue = [targetNode];
+
+    while (queue.length) {
+      const node = queue.shift();
+      if (visited.has(node.id)) continue;
+      visited.add(node.id);
+      if (node !== targetNode) order.unshift(node);
+
+      if (!node.inputs) continue;
+      for (let i = 0; i < node.inputs.length; i++) {
+        const input = node.inputs[i];
+        if (!input || input.link == null) continue;
+        const link = this.links[input.link];
+        if (!link) continue;
+        const origin = this.getNodeById(link.origin_id);
+        if (origin && !visited.has(origin.id)) {
+          queue.push(origin);
+        }
+      }
+    }
+
+    order.push(targetNode);
+    return order;
+  }
+
+  /**
+   * Rebuild the cached topological execution order (Strategy 4) AND the
+   * downstream adjacency index that powers markDirty / runTarget fusion.
+   *
+   *   1. Builds `_downstreamAdjacency: Map<nodeId, LGraphNode[]>` —
+   *      direct-successor list per node, in O(N+E).
+   *   2. Bulk-invalidates caches (sets _dirty directly on every node,
+   *      drops the WeakMap so old entries become GC-eligible).
+   *   3. Dispatches 'topologyRebuilt' for external listeners.
+   *
+   * Called automatically from connectionChange(); hosts can also call
+   * it manually after bulk-editing the graph.
+   */
+  rebuildTopology() {
+    this.updateExecutionOrder();
+
+    // ---- Strategy 4: build downstream adjacency index ----
+    const adj = new Map();
+    if (this._nodes) {
+      for (let i = 0; i < this._nodes.length; i++) {
+        const node = this._nodes[i];
+        adj.set(node.id, []);
+        if (!node.outputs) continue;
+        for (let j = 0; j < node.outputs.length; j++) {
+          const output = node.outputs[j];
+          if (!output || !output.links) continue;
+          for (let k = 0; k < output.links.length; k++) {
+            const link = this.links[output.links[k]];
+            if (!link) continue;
+            const target = this.getNodeById(link.target_id);
+            if (target && target !== node) {
+              adj.get(node.id).push(target);
+            }
+          }
+        }
+      }
+    }
+    this._downstreamAdjacency = adj;
+
+    // ---- Strategy 3: bulk cache invalidation ----
+    // Set _dirty directly (bypassing markDirty's downstream propagation)
+    // since we're already visiting every node — propagation would be
+    // O(N*E) redundant work. Drop the WeakMap entirely so old entries
+    // become GC-eligible.
+    if (this._nodes) {
+      for (let i = 0; i < this._nodes.length; i++) {
+        this._nodes[i]._dirty = true;
+      }
+    }
+    this._cacheStore = null;
+
+    this.dispatchEvent(new CustomEvent("topologyRebuilt", { detail: { graph: this } }));
   }
 
   /**
@@ -1295,7 +1577,12 @@ class LGraph {
   }
 
   connectionChange(node, link_info) {
-    this.updateExecutionOrder();
+    // Strategy 4 (Topological Sort Pre-computation): rebuild the cached
+    // execution order AND _downstreamAdjacency on every connection change
+    // so the next runStep can walk `_nodes_executable` directly without
+    // re-resolving dependencies. rebuildTopology() also clears downstream
+    // caches and dispatches 'topologyRebuilt'.
+    this.rebuildTopology();
     if (this.onConnectionChange) {
       this.onConnectionChange(node);
     }
