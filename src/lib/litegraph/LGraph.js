@@ -660,17 +660,21 @@ class LGraph extends EventTarget {
     }
     this._downstreamAdjacency = adj;
 
-    // ---- Strategy 3: bulk cache invalidation ----
-    // Set _dirty directly (bypassing markDirty's downstream propagation)
-    // since we're already visiting every node — propagation would be
-    // O(N*E) redundant work. Drop the WeakMap entirely so old entries
-    // become GC-eligible.
-    if (this._nodes) {
-      for (let i = 0; i < this._nodes.length; i++) {
-        this._nodes[i]._dirty = true;
-      }
-    }
-    this._cacheStore = null;
+    // ---- Strategy 3: fine-grained cache invalidation ----
+    // Previous code bulk-set _dirty=true on EVERY node and dropped the
+    // entire WeakMap cache here. That was wasteful: connecting A→B
+    // would invalidate the C→D chain's cache even though C→D was
+    // untouched, forcing a full recompute on the next step.
+    //
+    // The connect()/disconnectInput()/disconnectOutput() call sites
+    // already invoke markDirty() on the precise set of affected nodes
+    // (the target node + its downstream via markDirty propagation).
+    // So rebuildTopology() does NOT need to touch _dirty or _cacheStore
+    // at all — the fine-grained invalidation is already done by the
+    // callers.
+    //
+    // We only dispatch the event so external listeners (auto-save,
+    // debug overlays) can react.
 
     this.dispatchEvent(new CustomEvent("topologyRebuilt", { detail: { graph: this } }));
   }
