@@ -945,6 +945,41 @@ class LGraphNode extends EventTarget {
     }
   }
 
+  /**
+   * Private helper: remove a single output→input link. Centralizes the
+   * link-cleanup pattern (splice from output.links, null the input.link,
+   * delete from graph.links, bump _version, fire conn-change events) that
+   * was duplicated in disconnectOutput's single-target and ALL branches.
+   *
+   * @param {Object} output - this node's output slot object
+   * @param {number} slot - output slot index (for event firing)
+   * @param {number} linkIndex - index into output.links array
+   * @returns {{linkInfo: Object, target: LGraphNode|null}} the removed link info
+   * @private
+   */
+  _removeOutputLink(output, slot, linkIndex) {
+    const link_id = output.links[linkIndex];
+    const link_info = this.graph.links[link_id];
+    if (!link_info) return { linkInfo: null, target: null };
+
+    output.links.splice(linkIndex, 1);
+    const target = this.graph.getNodeById(link_info.target_id);
+    if (target) {
+      const input = target.inputs[link_info.target_slot];
+      if (input) input.link = null;
+      // Strategy 1: mark affected downstream node dirty.
+      if (target.markDirty) target.markDirty();
+    }
+    delete this.graph.links[link_id];
+    if (this.graph) this.graph._version++;
+
+    this._fireConnChange(
+      LiteGraph.OUTPUT, slot, false, link_info, output,
+      target, LiteGraph.INPUT, link_info.target_slot
+    );
+    return { linkInfo: link_info, target: target };
+  }
+
   connect(slot, target_node, target_slot) {
     target_slot = target_slot || 0;
 
@@ -1220,49 +1255,18 @@ class LGraphNode extends EventTarget {
       }
 
       for (let i = 0, l = output.links.length; i < l; i++) {
-        const link_id = output.links[i];
-        const link_info = this.graph.links[link_id];
+        const link_info = this.graph.links[output.links[i]];
         if (!link_info) continue;
-
         if (link_info.target_id === target_node.id) {
-          output.links.splice(i, 1);
-          const input = target_node.inputs[link_info.target_slot];
-          input.link = null;
-          delete this.graph.links[link_id];
-          if (this.graph) this.graph._version++;
-          this._fireConnChange(
-            LiteGraph.OUTPUT, slot, false, link_info, output,
-            target_node, LiteGraph.INPUT, link_info.target_slot
-          );
+          this._removeOutputLink(output, slot, i);
           break;
         }
       }
     } else {
       // Disconnect ALL links from this output
-      for (let i = 0, l = output.links.length; i < l; i++) {
-        const link_id = output.links[i];
-        const link_info = this.graph.links[link_id];
-        if (!link_info) continue;
-
-        const target = this.graph.getNodeById(link_info.target_id);
-        if (this.graph) this.graph._version++;
-        if (target) {
-          const input = target.inputs[link_info.target_slot];
-          input.link = null;
-          // Strategy 1: mark each affected downstream node dirty.
-          if (target.markDirty) target.markDirty();
-          this._fireConnChange(
-            LiteGraph.OUTPUT, slot, false, link_info, output,
-            target, LiteGraph.INPUT, link_info.target_slot
-          );
-        } else {
-          // No target node — still fire this node's side
-          this._fireConnChange(
-            LiteGraph.OUTPUT, slot, false, link_info, output,
-            null, LiteGraph.INPUT, -1
-          );
-        }
-        delete this.graph.links[link_id];
+      // Iterate backwards so splice doesn't shift unprocessed indices.
+      for (let i = output.links.length - 1; i >= 0; i--) {
+        this._removeOutputLink(output, slot, i);
       }
       output.links = null;
     }
