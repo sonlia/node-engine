@@ -281,9 +281,7 @@ class LGraphCanvas {
         }
 
         graph.attachCanvas(this);
-        // Restore original: close stale panels from the previous graph so
-        // they don't linger on top of the new subgraph view.
-        this.checkPanels();
+        // checkPanels() removed (panel system deleted)
         this.setDirty(true, true);
     }
 
@@ -878,29 +876,7 @@ class LGraphCanvas {
             } else {
                 // clicked outside of nodes
                 if (!skip_action) {
-                    // search for link connector
-                    if (!this.read_only) {
-                        for (
-                            let i = 0;
-                            i < this.visible_links.length;
-                            ++i
-                        ) {
-                            const link = this.visible_links[i];
-                            const center = link._pos;
-                            if (
-                                !center ||
-                                e.canvasX < center[0] - 4 ||
-                                e.canvasX > center[0] + 4 ||
-                                e.canvasY < center[1] - 4 ||
-                                e.canvasY > center[1] + 4
-                            ) {
-                                continue;
-                            }
-                            this.showLinkMenu(link, e);
-                            this.over_link_center = null;
-                            break;
-                        }
-                    }
+                    // Link center-click menu removed (right-click menus deleted)
 
                     this.selected_group = this.graph.getGroupOnPos(
                         e.canvasX,
@@ -4340,38 +4316,11 @@ class LGraphCanvas {
         return was_clicked;
     }
 
-    // ==================== SEARCH BOX / CONTEXT MENU (REMOVED) ====================
-    // The search box, right-click context menu, and all onMenu* handlers have
-    // been removed. Hosts should provide their own node-creation and menu UI.
-    // The methods below are no-op stubs kept only for interface compatibility
-    // so external code that calls them does not crash.
-
-    /** @deprecated no-op stub */ showSearchBox(event, options) {}
-    /** @deprecated no-op stub */ processContextMenu(node, event) {}
-    /** @deprecated no-op stub */ getCanvasMenuOptions() { return []; }
-    /** @deprecated no-op stub */ getNodeMenuOptions(node) { return []; }
-    /** @deprecated no-op stub */ getGroupMenuOptions(node) { return []; }
-    /** @deprecated no-op stub */ showLinkMenu(link, event) {}
-    /** @deprecated no-op stub */ createDefaultNodeForSlot(optPass) {}
-    /** @deprecated no-op stub */ showConnectionMenu(optPass) {}
-    /** @deprecated no-op stub */ prompt(title, value, callback, event, multiline) {}
-    /** @deprecated no-op stub */ showEditPropertyValue(node, property, options) {}
-    /** @deprecated no-op stub */ showShowNodePanel(node) {}
-    /** @deprecated no-op stub */ checkPanels() {}
-    /** @deprecated no-op stub */ static onMenuAdd() {}
-    /** @deprecated no-op stub */ static onMenuNodeRemove() {}
-    /** @deprecated no-op stub */ static onMenuNodeClone() {}
-    /** @deprecated no-op stub */ static onMenuNodeCollapse() {}
-    /** @deprecated no-op stub */ static onMenuNodeMode() {}
-    /** @deprecated no-op stub */ static onMenuNodeColors() {}
-    /** @deprecated no-op stub */ static onMenuNodeShapes() {}
-    /** @deprecated no-op stub */ static onMenuNodePin() {}
-    /** @deprecated no-op stub */ static onGroupAdd() {}
-    /** @deprecated no-op stub */ static showMenuNodeOptionalInputs() {}
-    /** @deprecated no-op stub */ static showMenuNodeOptionalOutputs() {}
-    /** @deprecated no-op stub */ static onShowMenuNodeProperties() {}
-    /** @deprecated no-op stub */ static onShowPropertyEditor() {}
-    /** @deprecated no-op stub */ static onMenuResizeNode() {}
+    // ==================== SEARCH BOX / CONTEXT MENU (DELETED) ====================
+    // The search box, right-click context menu, link context menu, and all
+    // onMenu* handlers have been fully removed. The stub methods that were
+    // kept for interface compat are also deleted now — callers should remove
+    // any references. Hosts provide their own node-creation and menu UI.
 
     /**
      * Resize the canvas (and bg canvas) to the given dimensions, or to the
@@ -4421,12 +4370,8 @@ class LGraphCanvas {
     }
 
     // ---------------------------------------------------------------------------
-    // Instance menu / dialog methods
+    // Instance dialog methods
     // ---------------------------------------------------------------------------
-
-    // (showLinkMenu / createDefaultNodeForSlot / showConnectionMenu / prompt /
-    //  showEditPropertyValue stubs are consolidated above with the other
-    //  menu/panel stubs.)
 
     // TODO refactor, there are different dialog, some uses createDialog, some dont
     createDialog(html, options) {
@@ -4719,8 +4664,6 @@ class LGraphCanvas {
             panel.close();
     }
 
-    // (showShowNodePanel stub consolidated above with other menu/panel stubs)
-
     showSubgraphPropertiesDialog(node) {
         console.log("showing subgraph properties dialog");
 
@@ -4993,7 +4936,7 @@ class LGraphCanvas {
      * subgraph dialogs, etc. uniformly (the refactored version only checked
      * this.node_panel and this.options_panel explicitly).
      */
-    // (checkPanels stub consolidated above with other menu/panel stubs)
+    // checkPanels removed (panel system deleted)
 
     /**
      * Hit-test a rectangular area on the canvas. Used for immediate-mode GUI
