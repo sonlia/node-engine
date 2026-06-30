@@ -4184,11 +4184,8 @@ class LGraphCanvas {
                 ctx.fillText(input.type, 130, y + h * 0.75);
                 y += h;
             }
-        if (
-            this.drawButton(20, y + 2, w - 20, h - 2, "+", "#151515", "#222")
-        ) {
-            this.showSubgraphPropertiesDialog(subnode);
-        }
+        // "+" button rendered but dialog removed (subgraph slot editor deleted)
+        this.drawButton(20, y + 2, w - 20, h - 2, "+", "#151515", "#222");
     }
 
     drawSubgraphPanelRight(subgraph, subnode, ctx) {
@@ -4258,19 +4255,16 @@ class LGraphCanvas {
                 );
                 y += h;
             }
-        if (
-            this.drawButton(
-                canvas_w - w,
-                y + 2,
-                w - 20,
-                h - 2,
-                "+",
-                "#151515",
-                "#222"
-            )
-        ) {
-            this.showSubgraphPropertiesDialogRight(subnode);
-        }
+        // "+" button rendered but dialog removed (subgraph slot editor deleted)
+        this.drawButton(
+            canvas_w - w,
+            y + 2,
+            w - 20,
+            h - 2,
+            "+",
+            "#151515",
+            "#222"
+        );
     }
 
     /** Draws a button into the canvas overlay */
@@ -4373,103 +4367,8 @@ class LGraphCanvas {
     // Instance dialog methods
     // ---------------------------------------------------------------------------
 
-    // TODO refactor, there are different dialog, some uses createDialog, some dont
-    createDialog(html, options) {
-        const def_options = { checkForInput: false, closeOnLeave: true, closeOnLeave_checkModified: true };
-        options = Object.assign(def_options, options || {});
-
-        const dialog = document.createElement("div");
-        dialog.className = "graphdialog";
-        dialog.innerHTML = html;
-        dialog.is_modified = false;
-
-        const rect = this.canvas.getBoundingClientRect();
-        let offsetx = -20;
-        let offsety = -20;
-        if (rect) {
-            offsetx -= rect.left;
-            offsety -= rect.top;
-        }
-
-        if (options.position) {
-            offsetx += options.position[0];
-            offsety += options.position[1];
-        } else if (options.event) {
-            offsetx += options.event.clientX;
-            offsety += options.event.clientY;
-        } //centered
-        else {
-            offsetx += this.canvas.width * 0.5;
-            offsety += this.canvas.height * 0.5;
-        }
-
-        dialog.style.left = offsetx + "px";
-        dialog.style.top = offsety + "px";
-
-        this.canvas.parentNode.appendChild(dialog);
-
-        // check for input and use default behaviour: save on enter, close on esc
-        if (options.checkForInput) {
-            const aI = dialog.querySelectorAll("input");
-            let focused = false;
-            if (aI) {
-                aI.forEach(function (iX) {
-                    iX.addEventListener("keydown", function (e) {
-                        dialog.modified();
-                        if (e.keyCode == 27) {
-                            dialog.close();
-                        } else if (e.keyCode != 13) {
-                            return;
-                        }
-                        // set value ?
-                        e.preventDefault();
-                        e.stopPropagation();
-                    });
-                    if (!focused) iX.focus();
-                });
-            }
-        }
-
-        dialog.modified = function () {
-            dialog.is_modified = true;
-        };
-        dialog.close = function () {
-            if (dialog.parentNode) {
-                dialog.parentNode.removeChild(dialog);
-            }
-        };
-
-        let dialogCloseTimer = null;
-        let prevent_timeout = false;
-        dialog.addEventListener("mouseleave", function (e) {
-            if (prevent_timeout)
-                return;
-            if (options.closeOnLeave || LiteGraph.dialog_close_on_mouse_leave)
-                if (!dialog.is_modified && LiteGraph.dialog_close_on_mouse_leave)
-                    dialogCloseTimer = setTimeout(dialog.close, LiteGraph.dialog_close_on_mouse_leave_delay); //dialog.close();
-        });
-        dialog.addEventListener("mouseenter", function (e) {
-            if (options.closeOnLeave || LiteGraph.dialog_close_on_mouse_leave)
-                if (dialogCloseTimer) clearTimeout(dialogCloseTimer);
-        });
-        const selInDia = dialog.querySelectorAll("select");
-        if (selInDia) {
-            // if filtering, check focus changed to comboboxes and prevent closing
-            selInDia.forEach(function (selIn) {
-                selIn.addEventListener("click", function (e) {
-                    prevent_timeout++;
-                });
-                selIn.addEventListener("blur", function (e) {
-                    prevent_timeout = 0;
-                });
-                selIn.addEventListener("change", function (e) {
-                    prevent_timeout = -1;
-                });
-            });
-        }
-
-        return dialog;
-    }
+    // createDialog / showSubgraphPropertiesDialog / showSubgraphPropertiesDialogRight
+    // removed — subgraph slot editing via popup dialogs is not needed.
 
     createPanel(title, options) {
         options = options || {};
@@ -4664,118 +4563,7 @@ class LGraphCanvas {
             panel.close();
     }
 
-    showSubgraphPropertiesDialog(node) {
-        console.log("showing subgraph properties dialog");
 
-        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
-        if (old_panel)
-            old_panel.close();
-
-        const panel = this.createPanel("Subgraph Inputs", { closable: true, width: 500 });
-        panel.node = node;
-        panel.classList.add("subgraph_dialog");
-
-        function inner_refresh() {
-            panel.clear();
-
-            //show currents
-            if (node.inputs)
-                for (let i = 0; i < node.inputs.length; ++i) {
-                    const input = node.inputs[i];
-                    if (input.not_subgraph_input)
-                        continue;
-                    const html = "<button>&#10005;</button> <span class='bullet_icon'></span><span class='name'></span><span class='type'></span>";
-                    const elem = panel.addHTML(html, "subgraph_property");
-                    elem.dataset["name"] = input.name;
-                    elem.dataset["slot"] = i;
-                    elem.querySelector(".name").innerText = input.name;
-                    elem.querySelector(".type").innerText = input.type;
-                    elem.querySelector("button").addEventListener("click", function (e) {
-                        node.removeInput(Number(this.parentNode.dataset["slot"]));
-                        inner_refresh();
-                    });
-                }
-        }
-
-        //add extra
-        const html = " + <span class='label'>Name</span><input class='name'/><span class='label'>Type</span><input class='type'></input><button>+</button>";
-        const elem = panel.addHTML(html, "subgraph_property extra", true);
-        elem.querySelector("button").addEventListener("click", function (e) {
-            const elem = this.parentNode;
-            const name = elem.querySelector(".name").value;
-            const type = elem.querySelector(".type").value;
-            if (!name || node.findInputSlot(name) != -1)
-                return;
-            node.addInput(name, type);
-            elem.querySelector(".name").value = "";
-            elem.querySelector(".type").value = "";
-            inner_refresh();
-        });
-
-        inner_refresh();
-        this.canvas.parentNode.appendChild(panel);
-        return panel;
-    }
-
-    showSubgraphPropertiesDialogRight(node) {
-        // console.log("showing subgraph properties dialog");
-        // old_panel if old_panel is exist close it
-        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
-        if (old_panel)
-            old_panel.close();
-        // new panel
-        const panel = this.createPanel("Subgraph Outputs", { closable: true, width: 500 });
-        panel.node = node;
-        panel.classList.add("subgraph_dialog");
-
-        function inner_refresh() {
-            panel.clear();
-            //show currents
-            if (node.outputs)
-                for (let i = 0; i < node.outputs.length; ++i) {
-                    const input = node.outputs[i];
-                    if (input.not_subgraph_output)
-                        continue;
-                    const html = "<button>&#10005;</button> <span class='bullet_icon'></span><span class='name'></span><span class='type'></span>";
-                    const elem = panel.addHTML(html, "subgraph_property");
-                    elem.dataset["name"] = input.name;
-                    elem.dataset["slot"] = i;
-                    elem.querySelector(".name").innerText = input.name;
-                    elem.querySelector(".type").innerText = input.type;
-                    elem.querySelector("button").addEventListener("click", function (e) {
-                        node.removeOutput(Number(this.parentNode.dataset["slot"]));
-                        inner_refresh();
-                    });
-                }
-        }
-
-        //add extra
-        const html = " + <span class='label'>Name</span><input class='name'/><span class='label'>Type</span><input class='type'></input><button>+</button>";
-        const elem = panel.addHTML(html, "subgraph_property extra", true);
-        elem.querySelector(".name").addEventListener("keydown", function (e) {
-            if (e.keyCode == 13) {
-                addOutput.apply(this);
-            }
-        });
-        elem.querySelector("button").addEventListener("click", function (e) {
-            addOutput.apply(this);
-        });
-        function addOutput() {
-            const elem = this.parentNode;
-            const name = elem.querySelector(".name").value;
-            const type = elem.querySelector(".type").value;
-            if (!name || node.findOutputSlot(name) != -1)
-                return;
-            node.addOutput(name, type);
-            elem.querySelector(".name").value = "";
-            elem.querySelector(".type").value = "";
-            inner_refresh();
-        }
-
-        inner_refresh();
-        this.canvas.parentNode.appendChild(panel);
-        return panel;
-    }
 
     // ==================== MISSING METHODS RESTORED ====================
     // These methods existed in the original LGraphCanvas.prototype but
