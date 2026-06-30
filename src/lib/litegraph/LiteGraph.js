@@ -140,6 +140,10 @@ class LiteGraphClass {
   static alt_drag_do_clone_nodes = false;
   static middle_click_slot_add_default_node = false;
   static release_link_on_empty_shows_menu = false;
+  // Kept for interface compat (EVENT/ACTION model removed, these are no-op):
+  static do_add_triggers_slots = false;
+  static allow_multi_output_for_events = true;
+  static use_deferred_actions = false;
   // Match original default: "mouse" (use mouse for retrocompatibility).
   // The earlier refactored version changed this to "pointer" which broke
   // touch-device fallback in pointerListenerAdd when PointerEvent wasn't

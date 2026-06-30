@@ -916,6 +916,35 @@ class LGraphNode extends EventTarget {
    * @param {LGraphNode|number} target_node - target node or its id
    * @param {number|string} target_slot - input slot index, name, or LiteGraph.EVENT (-1) for trigger
    */
+
+  /**
+   * Private helper: fire onConnectionsChange on both endpoints + onNodeConnectionChange
+   * on the graph. Centralizes the 6-8 line pattern that was duplicated 20+ times across
+   * connect / disconnectInput / disconnectOutput. Does NOT change any public API.
+   *
+   * @param {number} mySide - LiteGraph.INPUT or LiteGraph.OUTPUT (this node's side)
+   * @param {number} mySlot - slot index on this node
+   * @param {boolean} isConnect - true = connected, false = disconnected
+   * @param {Object} linkInfo - the link object
+   * @param {Object} mySlotObj - this node's slot object (input or output)
+   * @param {LGraphNode} otherNode - the other endpoint node
+   * @param {number} otherSide - LiteGraph.INPUT or LiteGraph.OUTPUT (other node's side)
+   * @param {number} otherSlot - slot index on the other node
+   * @private
+   */
+  _fireConnChange(mySide, mySlot, isConnect, linkInfo, mySlotObj, otherNode, otherSide, otherSlot) {
+    if (this.onConnectionsChange) {
+      this.onConnectionsChange(mySide, mySlot, isConnect, linkInfo, mySlotObj);
+    }
+    if (otherNode && otherNode.onConnectionsChange) {
+      otherNode.onConnectionsChange(otherSide, otherSlot, isConnect, linkInfo, mySlotObj);
+    }
+    if (this.graph && this.graph.onNodeConnectionChange) {
+      this.graph.onNodeConnectionChange(otherSide, otherNode, otherSlot, this, mySlot);
+      this.graph.onNodeConnectionChange(mySide, this, mySlot, otherNode, otherSlot);
+    }
+  }
+
   connect(slot, target_node, target_slot) {
     target_slot = target_slot || 0;
 
@@ -1063,34 +1092,10 @@ class LGraphNode extends EventTarget {
 
     if (this.graph) this.graph._version++;
 
-    if (this.onConnectionsChange) {
-      this.onConnectionsChange(LiteGraph.OUTPUT, slot, true, link_info, output);
-    }
-    if (target_node.onConnectionsChange) {
-      target_node.onConnectionsChange(
-        LiteGraph.INPUT,
-        target_slot,
-        true,
-        link_info,
-        input
-      );
-    }
-    if (this.graph && this.graph.onNodeConnectionChange) {
-      this.graph.onNodeConnectionChange(
-        LiteGraph.INPUT,
-        target_node,
-        target_slot,
-        this,
-        slot
-      );
-      this.graph.onNodeConnectionChange(
-        LiteGraph.OUTPUT,
-        this,
-        slot,
-        target_node,
-        target_slot
-      );
-    }
+    this._fireConnChange(
+      LiteGraph.OUTPUT, slot, true, link_info, output,
+      target_node, LiteGraph.INPUT, target_slot
+    );
 
     this.setDirtyCanvas(false, true);
     this.graph.afterChange();
@@ -1245,26 +1250,10 @@ class LGraphNode extends EventTarget {
           input.link = null;
           delete this.graph.links[link_id];
           if (this.graph) this.graph._version++;
-          if (target_node.onConnectionsChange) {
-            target_node.onConnectionsChange(
-              LiteGraph.INPUT,
-              link_info.target_slot,
-              false,
-              link_info,
-              input
-            );
-          }
-          if (this.onConnectionsChange) {
-            this.onConnectionsChange(LiteGraph.OUTPUT, slot, false, link_info, output);
-          }
-          if (this.graph && this.graph.onNodeConnectionChange) {
-            this.graph.onNodeConnectionChange(LiteGraph.OUTPUT, this, slot);
-            this.graph.onNodeConnectionChange(
-              LiteGraph.INPUT,
-              target_node,
-              link_info.target_slot
-            );
-          }
+          this._fireConnChange(
+            LiteGraph.OUTPUT, slot, false, link_info, output,
+            target_node, LiteGraph.INPUT, link_info.target_slot
+          );
           break;
         }
       }
@@ -1276,42 +1265,24 @@ class LGraphNode extends EventTarget {
         if (!link_info) continue;
 
         const target = this.graph.getNodeById(link_info.target_id);
-        let input = null;
         if (this.graph) this.graph._version++;
         if (target) {
-          input = target.inputs[link_info.target_slot];
+          const input = target.inputs[link_info.target_slot];
           input.link = null;
-          if (target.onConnectionsChange) {
-            target.onConnectionsChange(
-              LiteGraph.INPUT,
-              link_info.target_slot,
-              false,
-              link_info,
-              input
-            );
-          }
-          if (this.graph && this.graph.onNodeConnectionChange) {
-            this.graph.onNodeConnectionChange(
-              LiteGraph.INPUT,
-              target,
-              link_info.target_slot
-            );
-          }
           // Strategy 1: mark each affected downstream node dirty.
           if (target.markDirty) target.markDirty();
-        }
-        delete this.graph.links[link_id];
-        if (this.onConnectionsChange) {
-          this.onConnectionsChange(LiteGraph.OUTPUT, slot, false, link_info, output);
-        }
-        if (this.graph && this.graph.onNodeConnectionChange) {
-          this.graph.onNodeConnectionChange(LiteGraph.OUTPUT, this, slot);
-          this.graph.onNodeConnectionChange(
-            LiteGraph.INPUT,
-            target,
-            link_info.target_slot
+          this._fireConnChange(
+            LiteGraph.OUTPUT, slot, false, link_info, output,
+            target, LiteGraph.INPUT, link_info.target_slot
+          );
+        } else {
+          // No target node — still fire this node's side
+          this._fireConnChange(
+            LiteGraph.OUTPUT, slot, false, link_info, output,
+            null, LiteGraph.INPUT, -1
           );
         }
+        delete this.graph.links[link_id];
       }
       output.links = null;
     }
@@ -1369,22 +1340,11 @@ class LGraphNode extends EventTarget {
         delete this.graph.links[link_id];
         if (this.graph) this.graph._version++;
 
-        if (this.onConnectionsChange) {
-          this.onConnectionsChange(LiteGraph.INPUT, slot, false, link_info, input);
-        }
-        if (target_node.onConnectionsChange) {
-          target_node.onConnectionsChange(
-            LiteGraph.OUTPUT,
-            i,
-            false,
-            link_info,
-            output
-          );
-        }
-        if (this.graph && this.graph.onNodeConnectionChange) {
-          this.graph.onNodeConnectionChange(LiteGraph.OUTPUT, target_node, i);
-          this.graph.onNodeConnectionChange(LiteGraph.INPUT, this, slot);
-        }
+        // disconnectInput: this node is the INPUT side, target_node is the OUTPUT side.
+        this._fireConnChange(
+          LiteGraph.INPUT, slot, false, link_info, input,
+          target_node, LiteGraph.OUTPUT, i
+        );
       }
     }
 
@@ -1874,6 +1834,35 @@ class LGraphNode extends EventTarget {
   /** @deprecated forwards to onExecute. runStep calls this in no-catch path. */
   doExecute(param, options) {
     if (this.onExecute) this.onExecute(param, options);
+  }
+
+  // ---- EVENT/ACTION no-op stubs (interface compat, NOT functional) ----
+  // The EVENT/ACTION execution model is removed, but these methods are kept
+  // so external node types that override or call them do not crash.
+
+  /** @deprecated no-op stub */
+  addOnTriggerInput() { return -1; }
+  /** @deprecated no-op stub */
+  addOnExecutedOutput() { return -1; }
+  /** @deprecated no-op stub */
+  onAfterExecuteNode(param, options) {}
+  /** @deprecated no-op stub */
+  changeMode(modeTo) { this.mode = modeTo; return true; }
+  /** @deprecated no-op stub */
+  executePendingActions() {}
+  /** @deprecated no-op stub */
+  actionDo(action, param, options, action_slot) {
+    if (this.onAction) this.onAction(action, param, options, action_slot);
+  }
+  /** @deprecated no-op stub */
+  trigger(action, param, options) {}
+  /** @deprecated no-op stub */
+  triggerSlot(slot, param, link_id, options) {}
+  /** @deprecated no-op stub */
+  clearTriggeredSlot(slot, link_id) {}
+  /** @deprecated no-op stub */
+  executeAction(actionName, data) {
+    if (this.onAction) this.onAction(actionName, data);
   }
 
   // ===================== MISC =====================

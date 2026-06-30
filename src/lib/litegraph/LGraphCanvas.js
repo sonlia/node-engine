@@ -4382,6 +4382,27 @@ class LGraphCanvas {
     /** @deprecated */ getCanvasMenuOptions() { return []; }
     /** @deprecated */ getNodeMenuOptions(node) { return []; }
     /** @deprecated */ getGroupMenuOptions(node) { return []; }
+
+    /**
+     * Resize the canvas (and bg canvas) to the given dimensions, or to the
+     * parent element's size if no arguments. Called on window resize and
+     * initial mount.
+     */
+    resize(width, height) {
+        if (!width && !height) {
+            const parent = this.canvas.parentNode;
+            width = parent.offsetWidth;
+            height = parent.offsetHeight;
+        }
+        if (this.canvas.width == width && this.canvas.height == height) {
+            return;
+        }
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.bgcanvas.width = this.canvas.width;
+        this.bgcanvas.height = this.canvas.height;
+        this.setDirty(true, true);
+    }
     /** @deprecated */ static onMenuAdd() {}
     /** @deprecated */ static onMenuNodeRemove() {}
     /** @deprecated */ static onMenuNodeClone() {}
