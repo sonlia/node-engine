@@ -914,7 +914,7 @@ class LGraphNode extends EventTarget {
    * Returns the created LLink on success, null on failure.
    * @param {number|string} slot - output slot index or name
    * @param {LGraphNode|number} target_node - target node or its id
-   * @param {number|string} target_slot - input slot index, name, or LiteGraph.EVENT (-1) for trigger
+   * @param {number|string} target_slot - input slot index or name
    */
 
   /**
@@ -987,9 +987,6 @@ class LGraphNode extends EventTarget {
           console.log("Connect: Error, no slot of name " + target_slot);
         return null;
       }
-    } else if (target_slot === LiteGraph.EVENT) {
-      // EVENT slot connection removed (EVENT/ACTION model deleted)
-      return null;
     } else if (!target_node.inputs || target_slot >= target_node.inputs.length) {
       if (LiteGraph.debug) console.log("Connect: Error, slot number not found");
       return null;
@@ -1046,16 +1043,7 @@ class LGraphNode extends EventTarget {
       changed = true;
     }
 
-    // For EVENT outputs, optionally enforce single-output
-    if (output.links !== null && output.links.length) {
-      switch (output.type) {
-        case LiteGraph.EVENT:
-          // allow_multi_output_for_events removed (EVENT/ACTION model deleted)
-          break;
-        default:
-          break;
-      }
-    }
+    // EVENT output single-output enforcement removed (EVENT/ACTION model deleted)
 
     // Generate next link id
     let nextId;
@@ -1133,9 +1121,7 @@ class LGraphNode extends EventTarget {
       return this.connect(slot, target_node, target_slot);
     }
 
-    if (opts.createEventInCase && target_slotType === LiteGraph.EVENT) {
-      return this.connect(slot, target_node, -1);
-    }
+    // EVENT auto-connection branch removed (EVENT/ACTION model deleted)
 
     if (opts.generalTypeInCase) {
       const generalSlot = target_node.findInputSlotByType(0, false, true, true);
@@ -1148,9 +1134,7 @@ class LGraphNode extends EventTarget {
       opts.firstFreeIfOutputGeneralInCase &&
       (target_slotType === 0 || target_slotType === "*" || target_slotType === "")
     ) {
-      const freeSlot = target_node.findInputSlotFree({
-        typesNotAccepted: [LiteGraph.EVENT],
-      });
+      const freeSlot = target_node.findInputSlotFree({});
       if (freeSlot >= 0) {
         return this.connect(slot, target_node, freeSlot);
       }
@@ -1189,17 +1173,13 @@ class LGraphNode extends EventTarget {
       }
     }
 
-    if (opts.createEventInCase && source_slotType === LiteGraph.EVENT) {
-      // EVENT slot auto-connection removed (EVENT/ACTION model deleted)
-    }
+    // EVENT auto-connection branch removed (EVENT/ACTION model deleted)
 
     if (
       opts.firstFreeIfInputGeneralInCase &&
       (source_slotType === 0 || source_slotType === "*" || source_slotType === "")
     ) {
-      const freeSlot = source_node.findOutputSlotFree({
-        typesNotAccepted: [LiteGraph.EVENT],
-      });
+      const freeSlot = source_node.findOutputSlotFree({});
       if (freeSlot >= 0) {
         return source_node.connect(freeSlot, this, slot);
       }
@@ -1447,26 +1427,69 @@ class LGraphNode extends EventTarget {
   }
 
   // ===================== SLOT SEARCH =====================
+  // Public API (findInputSlot / findOutputSlot / findInputSlotFree /
+  // findOutputSlotFree / findInputSlotByType / findOutputSlotByType /
+  // findSlotByType) all preserved. Internal logic deduped via two private
+  // helpers: _findSlotByName (for findInputSlot/findOutputSlot) and
+  // _findFreeSlot (for findInputSlotFree/findOutputSlotFree).
 
-  findInputSlot(name, returnObj) {
-    if (!this.inputs) return -1;
-    for (let i = 0, l = this.inputs.length; i < l; ++i) {
-      if (name === this.inputs[i].name) {
-        return !returnObj ? i : this.inputs[i];
+  /**
+   * Private: find a slot by name in the given array.
+   * @param {Array} arr - this.inputs or this.outputs
+   * @param {string} name
+   * @param {boolean} returnObj
+   * @returns {number|Object} slot index or slot object, -1 if not found
+   * @private
+   */
+  _findSlotByName(arr, name, returnObj) {
+    if (!arr) return -1;
+    for (let i = 0, l = arr.length; i < l; ++i) {
+      if (name === arr[i].name) {
+        return !returnObj ? i : arr[i];
       }
     }
     return -1;
   }
 
-  findOutputSlot(name, returnObj) {
-    returnObj = returnObj || false;
-    if (!this.outputs) return -1;
-    for (let i = 0, l = this.outputs.length; i < l; ++i) {
-      if (name === this.outputs[i].name) {
-        return !returnObj ? i : this.outputs[i];
+  /**
+   * Private: find the first free (unconnected) slot in the given array.
+   * "Free" means: input.link == null (for inputs) or output.links == null
+   * (for outputs). Optionally skip slots whose type is in typesNotAccepted.
+   * @param {Array} arr - this.inputs or this.outputs
+   * @param {boolean} isInput - true if arr is inputs (link check differs)
+   * @param {Object} opts - { returnObj, typesNotAccepted }
+   * @returns {number|Object} slot index or slot object, -1 if not found
+   * @private
+   */
+  _findFreeSlot(arr, isInput, opts) {
+    opts = Object.assign({ returnObj: false, typesNotAccepted: [] }, opts || {});
+    if (!arr) return -1;
+    for (let i = 0, l = arr.length; i < l; ++i) {
+      const slot = arr[i];
+      // "Free" check: inputs use .link, outputs use .links
+      if (isInput) {
+        if (slot.link && slot.link != null) continue;
+      } else {
+        if (slot.links && slot.links != null) continue;
       }
+      if (
+        opts.typesNotAccepted &&
+        opts.typesNotAccepted.includes &&
+        opts.typesNotAccepted.includes(slot.type)
+      ) {
+        continue;
+      }
+      return !opts.returnObj ? i : slot;
     }
     return -1;
+  }
+
+  findInputSlot(name, returnObj) {
+    return this._findSlotByName(this.inputs, name, returnObj);
+  }
+
+  findOutputSlot(name, returnObj) {
+    return this._findSlotByName(this.outputs, name, returnObj);
   }
 
   /**
@@ -1474,43 +1497,11 @@ class LGraphNode extends EventTarget {
    * Restored original options: { returnObj, typesNotAccepted }.
    */
   findInputSlotFree(optsIn) {
-    const opts = Object.assign(
-      { returnObj: false, typesNotAccepted: [] },
-      optsIn || {}
-    );
-    if (!this.inputs) return -1;
-    for (let i = 0, l = this.inputs.length; i < l; ++i) {
-      if (this.inputs[i].link && this.inputs[i].link != null) continue;
-      if (
-        opts.typesNotAccepted &&
-        opts.typesNotAccepted.includes &&
-        opts.typesNotAccepted.includes(this.inputs[i].type)
-      ) {
-        continue;
-      }
-      return !opts.returnObj ? i : this.inputs[i];
-    }
-    return -1;
+    return this._findFreeSlot(this.inputs, true, optsIn);
   }
 
   findOutputSlotFree(optsIn) {
-    const opts = Object.assign(
-      { returnObj: false, typesNotAccepted: [] },
-      optsIn || {}
-    );
-    if (!this.outputs) return -1;
-    for (let i = 0, l = this.outputs.length; i < l; ++i) {
-      if (this.outputs[i].links && this.outputs[i].links != null) continue;
-      if (
-        opts.typesNotAccepted &&
-        opts.typesNotAccepted.includes &&
-        opts.typesNotAccepted.includes(this.outputs[i].type)
-      ) {
-        continue;
-      }
-      return !opts.returnObj ? i : this.outputs[i];
-    }
-    return -1;
+    return this._findFreeSlot(this.outputs, false, optsIn);
   }
 
   findInputSlotByType(type, returnObj, preferFreeSlot, doNotUseOccupied) {
@@ -1546,8 +1537,7 @@ class LGraphNode extends EventTarget {
       aDest = (aDest + "").toLowerCase().split(",");
       for (let sI = 0; sI < aSource.length; sI++) {
         for (let dI = 0; dI < aDest.length; dI++) {
-          if (aSource[sI] === "_event_") aSource[sI] = LiteGraph.EVENT;
-          if (aDest[sI] === "_event_") aDest[sI] = LiteGraph.EVENT;
+          // _event_ alias removed (EVENT/ACTION model deleted)
           if (aSource[sI] === "*") aSource[sI] = 0;
           if (aDest[sI] === "*") aDest[sI] = 0;
           if (aSource[sI] === aDest[dI]) {

@@ -52,7 +52,6 @@ class LGraphCanvas {
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAQBJREFUeNrs1rEKwjAUhlETUkj3vP9rdmr1Ysammk2w5wdxuLgcMHyptfawuZX4pJSWZTnfnu/lnIe/jNNxHHGNn//HNbbv+4dr6V+11uF527arU7+u63qfa/bnmh8sWLBgwYJlqRf8MEptXPBXJXa37BSl3ixYsGDBMliwFLyCV/DeLIMFCxYsWLBMwSt4Be/NggXLYMGCBUvBK3iNruC9WbBgwYJlsGApeAWv4L1ZBgsWLFiwYJmCV/AK3psFC5bBggULloJX8BpdwXuzYMGCBctgwVLwCl7Be7MMFixYsGDBsu8FH1FaSmExVfAxBa/gvVmwYMGCZbBg/W4vAQYA5tRF9QYlv/QAAAAASUVORK5CYII=";
 
     static link_type_colors = {
-        "-1": LiteGraph.EVENT_LINK_COLOR,
         number: "#AAA",
         node: "#DCA",
     };
@@ -2440,13 +2439,8 @@ class LGraphCanvas {
                 }
                 const connShape = connInOrOut.shape;
 
-                switch (connType) {
-                    case LiteGraph.EVENT:
-                        link_color = LiteGraph.EVENT_LINK_COLOR;
-                        break;
-                    default:
-                        link_color = LiteGraph.CONNECTING_LINK_COLOR;
-                }
+                // EVENT link color branch removed (EVENT/ACTION model deleted)
+                link_color = LiteGraph.CONNECTING_LINK_COLOR;
 
                 // the connection being dragged by the mouse
                 this.renderLink(
@@ -2462,10 +2456,7 @@ class LGraphCanvas {
                 );
 
                 ctx.beginPath();
-                if (
-                    connType === LiteGraph.EVENT ||
-                    connShape === LiteGraph.BOX_SHAPE
-                ) {
+                if (connShape === LiteGraph.BOX_SHAPE) {
                     ctx.rect(
                         this.connecting_pos[0] - 6 + 0.5,
                         this.connecting_pos[1] - 5 + 0.5,
@@ -2960,10 +2951,7 @@ class LGraphCanvas {
 
                     let doStroke = true;
 
-                    if (
-                        slot.type === LiteGraph.EVENT ||
-                        slot_shape === LiteGraph.BOX_SHAPE
-                    ) {
+                    if (slot_shape === LiteGraph.BOX_SHAPE) {
                         if (horizontal) {
                             ctx.rect(
                                 pos[0] - 5 + 0.5,
@@ -3063,10 +3051,7 @@ class LGraphCanvas {
 
                     let doStroke = true;
 
-                    if (
-                        slot_type === LiteGraph.EVENT ||
-                        slot_shape === LiteGraph.BOX_SHAPE
-                    ) {
+                    if (slot_shape === LiteGraph.BOX_SHAPE) {
                         if (horizontal) {
                             ctx.rect(
                                 pos[0] - 5 + 0.5,
@@ -3166,10 +3151,7 @@ class LGraphCanvas {
                 // BUGFIX: use input_slot (not `slot` which is out of scope
                 // after the for loop above). This caused "slot is not defined"
                 // when collapsing a node with a connected input.
-                if (
-                    input_slot.type === LiteGraph.EVENT ||
-                    input_slot.shape === LiteGraph.BOX_SHAPE
-                ) {
+                if (input_slot.shape === LiteGraph.BOX_SHAPE) {
                     ctx.rect(x - 7 + 0.5, y - 4, 14, 8);
                 } else if (input_slot.shape === LiteGraph.ARROW_SHAPE) {
                     ctx.moveTo(x + 8, y);
@@ -3193,10 +3175,7 @@ class LGraphCanvas {
                 ctx.strokeStyle = "black";
                 ctx.beginPath();
                 // BUGFIX: use output_slot (not `slot` which is out of scope).
-                if (
-                    output_slot.type === LiteGraph.EVENT ||
-                    output_slot.shape === LiteGraph.BOX_SHAPE
-                ) {
+                if (output_slot.shape === LiteGraph.BOX_SHAPE) {
                     ctx.rect(x - 7 + 0.5, y - 4, 14, 8);
                 } else if (output_slot.shape === LiteGraph.ARROW_SHAPE) {
                     ctx.moveTo(x + 6, y);
@@ -4361,27 +4340,38 @@ class LGraphCanvas {
         return was_clicked;
     }
 
-    // ==================== SEARCH BOX ====================
+    // ==================== SEARCH BOX / CONTEXT MENU (REMOVED) ====================
+    // The search box, right-click context menu, and all onMenu* handlers have
+    // been removed. Hosts should provide their own node-creation and menu UI.
+    // The methods below are no-op stubs kept only for interface compatibility
+    // so external code that calls them does not crash.
 
-    /** shows the search box to add new nodes */
-    /** @deprecated no-op stub. Was: show a search box for creating new nodes.
-     * Hosts should provide their own node-creation UI. The double-click
-     * detection is preserved so hosts can hook via onNodeDblClicked etc. */
-    showSearchBox(event, options) {}
-
-    // ==================== CONTEXT MENU ====================
-
-    /** @deprecated no-op stub. Was: show the right-click context menu for a node.     * Context menus removed — hosts should provide their own menu UI. */
-    processContextMenu(node, event) {}
-
-    // ==================== MENU / PANEL STUBS (DEPRECATED) ====================
-    // The entire context-menu / property-panel system has been removed. The
-    // methods below are no-op stubs kept only so external code that calls
-    // them does not crash. Hosts should provide their own menu/panel UI.
-
-    /** @deprecated */ getCanvasMenuOptions() { return []; }
-    /** @deprecated */ getNodeMenuOptions(node) { return []; }
-    /** @deprecated */ getGroupMenuOptions(node) { return []; }
+    /** @deprecated no-op stub */ showSearchBox(event, options) {}
+    /** @deprecated no-op stub */ processContextMenu(node, event) {}
+    /** @deprecated no-op stub */ getCanvasMenuOptions() { return []; }
+    /** @deprecated no-op stub */ getNodeMenuOptions(node) { return []; }
+    /** @deprecated no-op stub */ getGroupMenuOptions(node) { return []; }
+    /** @deprecated no-op stub */ showLinkMenu(link, event) {}
+    /** @deprecated no-op stub */ createDefaultNodeForSlot(optPass) {}
+    /** @deprecated no-op stub */ showConnectionMenu(optPass) {}
+    /** @deprecated no-op stub */ prompt(title, value, callback, event, multiline) {}
+    /** @deprecated no-op stub */ showEditPropertyValue(node, property, options) {}
+    /** @deprecated no-op stub */ showShowNodePanel(node) {}
+    /** @deprecated no-op stub */ checkPanels() {}
+    /** @deprecated no-op stub */ static onMenuAdd() {}
+    /** @deprecated no-op stub */ static onMenuNodeRemove() {}
+    /** @deprecated no-op stub */ static onMenuNodeClone() {}
+    /** @deprecated no-op stub */ static onMenuNodeCollapse() {}
+    /** @deprecated no-op stub */ static onMenuNodeMode() {}
+    /** @deprecated no-op stub */ static onMenuNodeColors() {}
+    /** @deprecated no-op stub */ static onMenuNodeShapes() {}
+    /** @deprecated no-op stub */ static onMenuNodePin() {}
+    /** @deprecated no-op stub */ static onGroupAdd() {}
+    /** @deprecated no-op stub */ static showMenuNodeOptionalInputs() {}
+    /** @deprecated no-op stub */ static showMenuNodeOptionalOutputs() {}
+    /** @deprecated no-op stub */ static onShowMenuNodeProperties() {}
+    /** @deprecated no-op stub */ static onShowPropertyEditor() {}
+    /** @deprecated no-op stub */ static onMenuResizeNode() {}
 
     /**
      * Resize the canvas (and bg canvas) to the given dimensions, or to the
@@ -4403,20 +4393,6 @@ class LGraphCanvas {
         this.bgcanvas.height = this.canvas.height;
         this.setDirty(true, true);
     }
-    /** @deprecated */ static onMenuAdd() {}
-    /** @deprecated */ static onMenuNodeRemove() {}
-    /** @deprecated */ static onMenuNodeClone() {}
-    /** @deprecated */ static onMenuNodeCollapse() {}
-    /** @deprecated */ static onMenuNodeMode() {}
-    /** @deprecated */ static onMenuNodeColors() {}
-    /** @deprecated */ static onMenuNodeShapes() {}
-    /** @deprecated */ static onMenuNodePin() {}
-    /** @deprecated */ static onGroupAdd() {}
-    /** @deprecated */ static showMenuNodeOptionalInputs() {}
-    /** @deprecated */ static showMenuNodeOptionalOutputs() {}
-    /** @deprecated */ static onShowMenuNodeProperties() {}
-    /** @deprecated */ static onShowPropertyEditor() {}
-    /** @deprecated */ static onMenuResizeNode() {}
 
     static getPropertyPrintableValue(value, values) {
         if (!values)
@@ -4448,23 +4424,9 @@ class LGraphCanvas {
     // Instance menu / dialog methods
     // ---------------------------------------------------------------------------
 
-    /** @deprecated no-op stub. Was: show the right-click menu for a link. */
-    showLinkMenu(link, event) {}
-
-    /** @deprecated no-op stub. Was: create a default node when releasing a
-     * dragged link on empty space. Context menus removed. */
-    createDefaultNodeForSlot(optPass) {}
-
-    /** @deprecated no-op stub. Was: show a connection menu when releasing a
-     * dragged link on empty space. Context menus removed. */
-    showConnectionMenu(optPass) {}
-
-    // refactor: there are different dialogs, some uses createDialog some dont
-    /** @deprecated no-op stub. Was: show a prompt dialog. Panels removed. */
-    prompt(title, value, callback, event, multiline) {}
-
-    /** @deprecated no-op stub. Was: show a property editor popup. Panels removed. */
-    showEditPropertyValue(node, property, options) {}
+    // (showLinkMenu / createDefaultNodeForSlot / showConnectionMenu / prompt /
+    //  showEditPropertyValue stubs are consolidated above with the other
+    //  menu/panel stubs.)
 
     // TODO refactor, there are different dialog, some uses createDialog, some dont
     createDialog(html, options) {
@@ -4757,9 +4719,7 @@ class LGraphCanvas {
             panel.close();
     }
 
-    /** @deprecated no-op stub. Was: show a property editor panel for a node.
-     * Hosts should provide their own property editor UI. */
-    showShowNodePanel(node) {}
+    // (showShowNodePanel stub consolidated above with other menu/panel stubs)
 
     showSubgraphPropertiesDialog(node) {
         console.log("showing subgraph properties dialog");
@@ -5033,8 +4993,7 @@ class LGraphCanvas {
      * subgraph dialogs, etc. uniformly (the refactored version only checked
      * this.node_panel and this.options_panel explicitly).
      */
-    /** @deprecated no-op stub. Was: close stale panel dialogs. Panels removed. */
-    checkPanels() {}
+    // (checkPanels stub consolidated above with other menu/panel stubs)
 
     /**
      * Hit-test a rectangular area on the canvas. Used for immediate-mode GUI

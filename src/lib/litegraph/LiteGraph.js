@@ -47,7 +47,6 @@ class LiteGraphClass {
 
   // ===================== LINK =====================
   static LINK_COLOR = "#9A9";
-  static EVENT_LINK_COLOR = "#A86";
   static CONNECTING_LINK_COLOR = "#AFA";
 
   // ===================== LIMITS =====================
@@ -67,13 +66,10 @@ class LiteGraphClass {
   static INPUT = 1;
   static OUTPUT = 2;
 
-  // ===================== EVENT/ACTION (DEPRECATED) =====================
-  // The EVENT/ACTION execution model has been removed. These constants are
-  // kept only so external node types that reference LiteGraph.EVENT /
-  // LiteGraph.ACTION as slot type sentinels don't crash. They are treated
-  // as ordinary types by isValidConnection now (no special event linking).
-  static EVENT = -1;
-  static ACTION = -1;
+  // EVENT/ACTION constants removed — the event execution model is gone.
+  // (LiteGraph.EVENT / LiteGraph.ACTION are no longer defined; any external
+  // code referencing them will get undefined, which is the intended signal
+  // that the feature is unavailable.)
 
   // ===================== NODE MODES =====================
   // ON_EVENT (1) and ON_TRIGGER (3) modes are no longer enforced — the
@@ -328,8 +324,6 @@ class LiteGraphClass {
     let allTypes = [];
     if (typeof slot_type === "string") {
       allTypes = slot_type.split(",");
-    } else if (slot_type === LiteGraph.EVENT || slot_type === LiteGraph.ACTION) {
-      allTypes = ["_event_"];
     } else {
       allTypes = ["*"];
     }
