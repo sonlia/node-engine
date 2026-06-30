@@ -138,8 +138,6 @@ class LiteGraphClass {
 
   // ===================== BEHAVIOR =====================
   static alt_drag_do_clone_nodes = false;
-  static do_add_triggers_slots = false; // deprecated, no-op (EVENT/ACTION removed)
-  static allow_multi_output_for_events = true;
   static middle_click_slot_add_default_node = false;
   static release_link_on_empty_shows_menu = false;
   // Match original default: "mouse" (use mouse for retrocompatibility).
@@ -157,7 +155,6 @@ class LiteGraphClass {
   static catch_exceptions = true;
   static throw_errors = true;
   static allow_scripts = false;
-  static use_deferred_actions = false; // deprecated, no-op (EVENT/ACTION removed)
 
   /**
    * Register a node class so it can be listed when the user wants to create a new one.

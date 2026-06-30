@@ -369,16 +369,7 @@ class LGraph extends EventTarget {
         const node = nodes[j];
         if (!node || node.mode !== LiteGraph.ALWAYS || !node.onExecute) continue;
 
-        // Flush deferred actions — interface compat (both paths).
-        // Must happen BEFORE the dirty check so pending actions are
-        // processed even if the node would otherwise be skipped.
-        if (
-          LiteGraph.use_deferred_actions &&
-          node._waiting_actions &&
-          node._waiting_actions.length
-        ) {
-          node.executePendingActions();
-        }
+        // Deferred-actions flush removed (EVENT/ACTION model deleted).
 
         if (optimized) {
           // Strategy 1 (Reactive Dirty Marking) — skip clean nodes.

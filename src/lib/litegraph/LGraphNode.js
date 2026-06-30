@@ -58,7 +58,7 @@ class LGraphNode extends EventTarget {
 
     // Rendering/execution state
     this._shape = null;
-    this._waiting_actions = [];
+    // _waiting_actions removed (EVENT/ACTION deferred-execution model deleted)
 
     // ====================================================================
     // Execution Optimization State (fusion of strategies 1/3/5)
@@ -959,12 +959,8 @@ class LGraphNode extends EventTarget {
         return null;
       }
     } else if (target_slot === LiteGraph.EVENT) {
-      if (LiteGraph.do_add_triggers_slots) {
-        target_node.changeMode(LiteGraph.ON_TRIGGER);
-        target_slot = target_node.findInputSlot("onTrigger");
-      } else {
-        return null;
-      }
+      // EVENT slot connection removed (EVENT/ACTION model deleted)
+      return null;
     } else if (!target_node.inputs || target_slot >= target_node.inputs.length) {
       if (LiteGraph.debug) console.log("Connect: Error, slot number not found");
       return null;
@@ -1025,11 +1021,7 @@ class LGraphNode extends EventTarget {
     if (output.links !== null && output.links.length) {
       switch (output.type) {
         case LiteGraph.EVENT:
-          if (!LiteGraph.allow_multi_output_for_events) {
-            this.graph.beforeChange();
-            this.disconnectOutput(slot, false, { doProcessChange: false });
-            changed = true;
-          }
+          // allow_multi_output_for_events removed (EVENT/ACTION model deleted)
           break;
         default:
           break;
@@ -1193,10 +1185,7 @@ class LGraphNode extends EventTarget {
     }
 
     if (opts.createEventInCase && source_slotType === LiteGraph.EVENT) {
-      if (LiteGraph.do_add_triggers_slots) {
-        const execSlot = source_node.addOnExecutedOutput();
-        return source_node.connect(execSlot, this, slot);
-      }
+      // EVENT slot auto-connection removed (EVENT/ACTION model deleted)
     }
 
     if (
@@ -1869,58 +1858,22 @@ class LGraphNode extends EventTarget {
   }
 
 
-  // ===================== EVENT/TRIGGER (DEPRECATED) =====================
-  // The EVENT/ACTION execution model has been removed. These methods are
-  // kept as no-op stubs for interface compatibility — external node types
-  // that override onAction / onTrigger / onAfterExecuteNode or call
-  // doExecute / trigger / triggerSlot will not crash, but the methods do
-  // nothing. The engine is purely data-flow driven (mode=ALWAYS) now.
+  // ===================== EVENT/TRIGGER (REMOVED) =====================
+  // The EVENT/ACTION execution model has been fully removed. The engine is
+  // purely data-flow driven (mode=ALWAYS) now. The following methods are
+  // kept as minimal no-op stubs ONLY for doExecute (still called by runStep
+  // in the do_not_catch_errors=true path) — all other EVENT/ACTION methods
+  // (addOnTriggerInput, addOnExecutedOutput, onAfterExecuteNode, changeMode,
+  // executePendingActions, actionDo, trigger, triggerSlot, clearTriggeredSlot,
+  // executeAction) have been deleted as they had zero callers.
+  //
+  // doExecute is kept because _runStepInternal checks `node.doExecute` and
+  // calls it. It just forwards to onExecute. If onExecute is undefined this
+  // is a no-op.
 
-  /** @deprecated no-op stub */
-  addOnTriggerInput() { return -1; }
-
-  /** @deprecated no-op stub */
-  addOnExecutedOutput() { return -1; }
-
-  /** @deprecated no-op stub */
-  onAfterExecuteNode(param, options) {}
-
-  /** @deprecated no-op stub — only ALWAYS (0) and NEVER (2) modes honored */
-  changeMode(modeTo) { this.mode = modeTo; return true; }
-
-  /**
-   * @deprecated no-op stub. Was: wrap onExecute with action tracking.
-   * Now just calls onExecute directly when do_not_catch_errors=false
-   * (the catch path). The no-catch path callers should call onExecute
-   * themselves — but we keep this stub so runStep internals that check
-   * `node.doExecute` dont crash.
-   */
+  /** @deprecated forwards to onExecute. runStep calls this in no-catch path. */
   doExecute(param, options) {
     if (this.onExecute) this.onExecute(param, options);
-    if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
-  }
-
-  /** @deprecated no-op stub */
-  executePendingActions() {}
-
-  /** @deprecated no-op stub */
-  actionDo(action, param, options, action_slot) {
-    if (this.onAction) this.onAction(action, param, options, action_slot);
-    if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
-  }
-
-  /** @deprecated no-op stub */
-  trigger(action, param, options) {}
-
-  /** @deprecated no-op stub */
-  triggerSlot(slot, param, link_id, options) {}
-
-  /** @deprecated no-op stub */
-  clearTriggeredSlot(slot, link_id) {}
-
-  /** @deprecated no-op stub */
-  executeAction(actionName, data) {
-    if (this.onAction) this.onAction(actionName, data);
   }
 
   // ===================== MISC =====================
