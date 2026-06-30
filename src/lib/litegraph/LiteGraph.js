@@ -730,25 +730,8 @@ class LiteGraphClass {
   /**
    * Close all open context menus
    */
-  static closeAllContextMenus(refWindow) {
-    refWindow = refWindow || window;
-    const elements = refWindow.document.querySelectorAll(".litecontextmenu");
-    for (let i = 0; i < elements.length; i++) {
-      if (elements[i].close) elements[i].close();
-      else if (elements[i].parentNode) elements[i].parentNode.removeChild(elements[i]);
-    }
-    // Also close panels
-    const panels = refWindow.document.querySelectorAll(".litepanel");
-    for (let i = 0; i < panels.length; i++) {
-      if (panels[i].close) panels[i].close();
-      else if (panels[i].parentNode) panels[i].parentNode.removeChild(panels[i]);
-    }
-    const dialogs = refWindow.document.querySelectorAll(".litedialog");
-    for (let i = 0; i < dialogs.length; i++) {
-      if (dialogs[i].close) dialogs[i].close();
-      else if (dialogs[i].parentNode) dialogs[i].parentNode.removeChild(dialogs[i]);
-    }
-  }
+  /** @deprecated no-op stub. Context menus removed. */
+  static closeAllContextMenus(refWindow) {}
 
   /**
    * Extend class (copy prototype properties)

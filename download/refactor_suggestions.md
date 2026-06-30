@@ -1,282 +1,218 @@
-# LiteGraph 重构优化建议
+# LiteGraph 重构优化建议（v2）
 
-基于对当前 15059 行代码的完整扫描，按**收益/风险比**排序的可执行建议。
+基于当前 12824 行代码的完整扫描。**原则：减少复杂逻辑和冗余代码，问题聚焦不分散。** 不考虑保守/替代方案，只做明确能降低复杂度且零风险的工作。
+
+已完成（见 git log）：死代码删除（nodes.js / CurveEditor.js / widget 渲染）、EVENT/ACTION 系统移除、右键菜单移除、5 策略融合、runStep 双路径合并、缓存精细化失效、折叠/拖线 bug 修复。
 
 ---
 
-## 当前代码分布
+## 当前状态
 
 | 文件 | 行数 | 占比 |
 |---|---|---|
-| LGraphCanvas.js | 7709 | 51.2% |
-| LGraphNode.js | 2239 | 14.9% |
-| LGraph.js | 1898 | 12.6% |
-| LiteGraph.js | 787 | 5.2% |
-| 其他 9 个文件 | 4426 | 29.4% |
-| **总计** | **15059** | |
+| LGraphCanvas.js | 6267 | 48.9% |
+| LGraphNode.js | 2045 | 15.9% |
+| LGraph.js | 1860 | 14.5% |
+| LiteGraph.js | 795 | 6.2% |
+| 其他 7 个文件 | 1857 | 14.5% |
+| **总计** | **12824** | |
 
 ---
 
-## 一、死代码删除（高收益、低风险）
+## P0：菜单/面板死代码删除（~1100 行，零风险）
 
-### 1.1 删除 `nodes.js`（337 行，完全死代码）
+### 问题
 
-**事实**：
-- `nodes.js` 定义了 NumberNode/MathNode/DisplayNode 等 12 个内置节点
-- `page.tsx` 自己重新定义了这些节点，**从不 import `nodes.js`**
-- `index.js` 也不 import 它
-- 文件里的节点还在用 `this.addWidget(...)`（已废弃的 widget 系统）
+上一轮把 `processContextMenu` / `showSearchBox` / `showShowNodePanel` / `showConnectionMenu` / `createDefaultNodeForSlot` 改成了 no-op stub，但**它们背后的整套菜单构建和面板系统还在**，且无人调用：
 
-**建议**：直接删除 `nodes.js`。如果要保留示例，移到 `examples/` 目录并清理 widget 调用。
+| 方法 | 行数 | 调用者 | 状态 |
+|---|---|---|---|
+| `getCanvasMenuOptions` | ~30 | 无（原被 processContextMenu 调，已 stub） | 死代码 |
+| `getNodeMenuOptions` | ~110 | 无（同上） | 死代码 |
+| `onMenuAdd` | ~80 | 仅被 getCanvasMenuOptions 引用 | 死代码 |
+| `onMenuNodeRemove` | ~30 | 仅被 getNodeMenuOptions 引用 | 死代码 |
+| `onMenuNodeClone` | ~35 | 同上 | 死代码 |
+| `onMenuNodeCollapse` | ~25 | 同上 | 死代码 |
+| `onMenuNodeMode` | ~35 | 同上 | 死代码 |
+| `onMenuNodeColors` | ~65 | 同上 | 死代码 |
+| `onMenuNodeShapes` | ~40 | 同上 | 死代码 |
+| `onMenuNodePin` | ~15 | 同上 | 死代码 |
+| `onShowMenuNodeProperties` | ~150 | 同上 | 死代码 |
+| `onMenuResizeNode` | ~40 | 同上 | 死代码 |
+| `prompt` | ~110 | 仅被 onShowMenuNodeProperties 调 | 死代码 |
+| `showEditPropertyValue` | ~130 | 仅被 onShowMenuNodeProperties 调 | 死代码 |
+| `createPanel` | ~180 | 仅被 showEditPropertyValue / drawSubgraphPanel* 调 | 见 P0.2 |
+| `checkPanels` | ~50 | 仅被构造函数调，但 node_panel/options_panel 永远 null | 死代码 |
 
-### 1.2 删除 `CurveEditor.js`（229 行，未使用）
+**总计约 1100 行死代码**，集中在 LGraphCanvas.js 第 4400-6300 行区间。
 
-**事实**：
-- 只有 `index.js` import 它并挂到 `LiteGraph.CurveEditor`
-- 全项目没有任何 `new CurveEditor(...)` 调用
-- 是原始 litegraph 的曲线编辑器，当前项目用不到
+### P0.1 删除 onMenu* 静态方法 + getCanvasMenuOptions + getNodeMenuOptions
 
-**建议**：删除文件 + 删除 `index.js` 里的 import/挂载/export。
+这些方法只互相引用，对外没有任何调用入口（`processContextMenu` 已是 stub）。整段删除。
 
-### 1.3 删除 LGraphCanvas.js 里的 Widget 渲染代码（505 行）
+### P0.2 删除 prompt + showEditPropertyValue + onShowMenuNodeProperties
 
-**事实**：
-- `drawNodeWidgets`（250 行）+ `processNodeWidgets`（255 行）
-- Widget 系统已经在 commit `3200834` 移除，`addWidget` 是 no-op stub
-- 这两个方法第一行都是 `if (!node.widgets || !node.widgets.length) return`，永远不会往下走
-- 调用点（3 处 `processNodeWidgets` + 1 处 `drawNodeWidgets`）也是死调用
+`onShowMenuNodeProperties` 只被 `getNodeMenuOptions`（P0.1 已删）引用；`showEditPropertyValue` 只被 `onShowMenuNodeProperties` 调；`prompt` 只被 `showEditPropertyValue` 调。链条断开后全删。
 
-**建议**：
-- 删除 `drawNodeWidgets` 和 `processNodeWidgets` 方法体
-- 删除调用点（LGraphCanvas.js 第 814、1128、1404、3195 行）
-- 保留方法签名作为 no-op stub（防止外部调用报错）：`drawNodeWidgets() { return 0; }`
+### P0.3 删除 checkPanels + 简化 createPanel
 
-**收益**：LGraphCanvas.js 从 7709 行降到约 7200 行。
+`checkPanels` 检查 `this.node_panel` / `this.options_panel`，但这俩字段永远 null（只有 `showShowNodePanel` 和 `showEditPropertyValue` 会赋值，都是 stub）。`checkPanels` 本身也只在构造函数调一次。
 
----
+`createPanel` 被 `drawSubgraphPanelLeft/Right` 调用（见 P0.4 判断）。如果 subgraph 面板保留则 createPanel 保留；如果删则一起删。
 
-## 二、EVENT/ACTION 系统精简（中收益、需评估）
+### P0.4 drawSubgraphPanel 系列（需确认）
 
-### 2.1 现状
+`drawSubgraphPanel` / `drawSubgraphPanelLeft` / `drawSubgraphPanelRight`（~180 行）在 `drawFrontCanvas` 第 2630 行被调用，但只在 `this._graph_stack` 非空时（即打开了 subgraph）。当前 demo 不用 subgraph，但 `openSubgraph` / `closeSubgraph` 方法还在且可用。
 
-LGraphNode.js 里有完整的 EVENT/ACTION 系统（188 行）：
-- `addOnTriggerInput` / `addOnExecutedOutput` / `onAfterExecuteNode`
-- `changeMode` / `doExecute` / `executePendingActions`
-- `actionDo` / `trigger` / `triggerSlot` / `clearTriggeredSlot` / `executeAction`
+**建议保留**（功能完整，不是死代码，只是 demo 没用到）。如果确认永远不用 subgraph，再删。
 
-配套的状态字段：`_waiting_actions`、`execute_triggered`、`action_triggered`、`action_call`、`exec_version`
+### P0.5 ContextMenu.js 文件
 
-LGraph.js 里有：`nodes_executing` / `nodes_actioning` / `nodes_executedAction` 数组
+`ContextMenu.js`（488 行）只被 LGraphCanvas.js 里的 `onMenu*` 方法 `new ContextMenu(...)` 调用。P0.1 删完后，`ContextMenu` 类无任何调用者。
 
-### 2.2 实际使用情况
-
-| 调用者 | 用途 |
-|---|---|
-| `LGraph._runStepClassic/Optimized` | `do_not_catch_errors=true` 时调 `doExecute()` |
-| `LGraphCanvas.drawNodeShape` | 读 `execute_triggered`/`action_triggered` 画闪烁效果 |
-| `LGraphCanvas` 菜单 | `changeMode(ON_TRIGGER)` 切换节点模式 |
-| `nodes.js` 的 TriggerNode | 用 `onAction` + `triggerSlot` —— **但 nodes.js 是死代码** |
-| `page.tsx` 的节点 | **完全不用** EVENT/ACTION 系统 |
-
-### 2.3 建议（保守方案）
-
-**保留** EVENT/ACTION 系统，因为：
-1. `doExecute` 被 `runStep` 调用，承载 action 跟踪和 `onAfterExecuteNode` 回调
-2. `changeMode` 被右键菜单调用
-3. 外部用户可能依赖 `LiteGraph.EVENT`/`LiteGraph.ACTION` 类型和 `triggerSlot` API
-
-**精简**：
-- 删除 `execute_triggered`/`action_triggered` 的递减逻辑（LGraphCanvas.js 第 3619-3620 行）—— 如果不用闪烁动画，这俩字段没用
-- 删除 `nodes_actioning` 数组（LGraph.js）—— 只在 `actionDo` 里写，没人读
-- 把 `LiteGraph.do_add_triggers_slots` 相关代码删掉（默认 false，从未被设为 true）
-
-### 2.4 建议（激进方案，如果确认不用 EVENT 流）
-
-如果项目确定只用 `mode=ALWAYS` 的数据流节点（page.tsx 里全是这种），可以：
-- 把 `doExecute` 简化为直接调 `onExecute` + `onAfterExecuteNode`
-- 删除 `actionDo`/`trigger`/`triggerSlot`/`clearTriggeredSlot`/`executeAction`
-- 删除 `_waiting_actions`/`executePendingActions`/`use_deferred_actions`
-- `runStep` 两个分支都调 `doExecute`（简化版）
-
-**收益**：LGraphNode.js 减少 ~150 行，LGraph.js 减少约 20 行。但**风险高**，需要确认没有外部代码依赖。
+**建议删除文件 + 清理 index.js 的 import/挂载/export**。如果外部代码可能直接用 `LiteGraph.ContextMenu`，保留文件但它是纯死代码。
 
 ---
 
-## 三、LGraphCanvas.js 拆分（高收益、中风险）
+## P1：processMouseDown 拆分（572 行 → 拆成 4 个聚焦方法）
 
-### 3.1 问题
+### 问题
 
-7709 行单文件，最大方法 `processMouseDown` 572 行、`drawNode` 430 行、`showSearchBox` 372 行。难以维护。
+`processMouseDown` 是整个代码库最大的方法（572 行），职责混杂：canvas 空白点击、节点点击、slot 点击、折叠框点击、resize handle、group 操作、连接拖动起点。难以维护和测试。
 
-### 3.2 建议拆分方案
+### 建议拆分
 
-按职责拆成 5 个模块（保持在 LGraphCanvas 命名空间下，接口不变）：
+按职责拆成 4 个私有方法（不拆文件，保持 LGraphCanvas 单文件）：
 
 ```
-LGraphCanvas/
-├── index.js              // 主类，协调各模块（~1500 行）
-├── rendering.js          // drawNode/drawNodeShape/drawConnections/drawBackCanvas/drawFrontCanvas（~2500 行）
-├── interaction.js        // processMouseDown/Up/Move/processKey/processContextMenu（~2000 行）
-├── panels.js             // showSearchBox/showShowNodePanel/createPanel/drawSubgraphPanel（~1200 行）
-└── helpers.js            // renderLink/computeConnectionPoint/renderInfo/小工具（~500 行）
+processMouseDown(e)
+  ├─ _handleCanvasBgClick(e)      // 空白画布点击/框选起点（~80 行）
+  ├─ _handleNodeClick(e, node)    // 节点体点击/折叠框/double-click（~150 行）
+  ├─ _handleSlotClick(e, node)    // input/output slot 点击/断开重连（~180 行）
+  └─ _handleResizeHandle(e, node) // 右下角 resize（~40 行）
 ```
 
-**实施方式**：用 mixin 模式，把方法挂到 LGraphCanvas.prototype 上，保持 `canvas.drawNode(...)` 调用方式不变。
+每个方法返回 `true` 表示已处理（skip_action），`false` 表示继续。`processMouseDown` 变成协调器（~50 行）。
 
-**风险**：
-- `this` 指向需要小心（mixin 方法里 `this` 还是 canvas 实例）
-- 内部私有字段（`_xxx`）需要保持原样
-- 需要完整测试覆盖（鼠标交互、渲染、子图）
+**收益**：每个方法职责单一，可独立测试；修改 slot 逻辑不会碰 group 逻辑。
 
-### 3.3 替代方案（更低风险）
-
-不拆文件，但把超大方法拆小：
-- `processMouseDown`（572 行）→ 拆成 `handleCanvasClick`/`handleNodeClick`/`handleSlotClick`/`handleBoxSelect` 等
-- `drawNode`（430 行）→ 拆成 `drawNodeTitle`/`drawNodeBody`/`drawNodeSlots`
+**风险**：低，行为完全等价，只是拆分。
 
 ---
 
-## 四、getConnectionPos 双实现统一（中收益、低风险）
+## P2：LGraphNode find*Slot 系列去重（7 个方法 → 3 个）
 
-### 4.1 问题
+### 问题
 
-`LGraphNode.getConnectionPos`（80 行）计算 slot 位置。LGraphCanvas 里有 13 处调用 `node.getConnectionPos(...)`。
+LGraphNode.js 有 7 个 slot 查找方法，逻辑大量重复：
 
-当前 LGraphNode 里的实现是**完整版**（处理 collapsed/horizontal/slot_start_y 等），没有委托给 canvas。
+| 方法 | 行数 | 作用 |
+|---|---|---|
+| `findInputSlot(name, returnObj)` | 10 | 按名找 input |
+| `findOutputSlot(name, returnObj)` | 10 | 按名找 output |
+| `findInputSlotFree(optsIn)` | 20 | 找空闲 input |
+| `findOutputSlotFree(optsIn)` | 20 | 找空闲 output |
+| `findInputSlotByType(type, ...)` | 4 | 按类型找 input（委托 findSlotByType）|
+| `findOutputSlotByType(type, ...)` | 4 | 按类型找 output（委托 findSlotByType）|
+| `findSlotByType(input, type, ...)` | 50 | 实际实现 |
 
-之前对话提到过"渲染方法迁移到 canvas，LGraphNode 保留 fallback"，但 `getConnectionPos` 没有这个委托——它在 node 里是完整实现。
+`findInputSlot`/`findOutputSlot` 几乎一模一样（只差 `this.inputs` vs `this.outputs`）。`findInputSlotFree`/`findOutputSlotFree` 同理。
 
-### 4.2 建议
+### 建议
 
-保持现状（LGraphNode 里有完整实现）。但可以：
-- 把 `getConnectionPos` 里的常量（`NODE_SLOT_HEIGHT`/`NODE_TITLE_HEIGHT`）从 `LiteGraph.X` 直接读取改为局部变量缓存（微优化）
-- 如果性能敏感，可以把 `out = out || new Float32Array(2)` 改成调用方传入复用的 Float32Array（减少 GC）
+合并成 3 个方法：
+
+```
+findSlot(name_or_type, opts)   // 统一入口，opts.isInput + opts.byType + opts.freeSlot + opts.returnObj
+_findSlotInArray(arr, name, opts)  // 私有实现
+```
+
+`findInputSlot`/`findOutputSlot`/`findInputSlotFree`/`findOutputSlotFree`/`findInputSlotByType`/`findOutputSlotByType` 保留为薄包装（一行委托），接口兼容。
+
+**收益**：实现逻辑只写一遍，~40 行重复代码消除。
+
+**风险**：低，包装方法保证接口不变。
 
 ---
 
-## 五、工具函数调用模式统一（低收益、低风险）
+## P3：onConnectionsChange 调用去重（20 处 → 提取公共方法）
 
-### 5.1 问题
+### 问题
 
-工具函数有两种调用方式：
-- 直接 import：`isInsideRectangle(...)`（LGraphCanvas.js 用了 34 次）
-- 通过 LiteGraph：`LiteGraph.isInsideRectangle(...)`（2 次）
-
-`index.js` 把所有工具函数挂到 `LiteGraph` 上是为了兼容原始 API。
-
-### 5.2 建议
-
-保持现状。内部代码用直接 import（更快、tree-shaking 友好），`LiteGraph.X` 挂载保留给外部用户。这是合理的双层 API。
-
----
-
-## 六、缓存失效策略优化（中收益、低风险）
-
-### 6.1 现状
-
-`rebuildTopology()` 在每次 `connectionChange` 时：
-1. 重建拓扑序（O(N+E)）
-2. 重建邻接表（O(N+E)）
-3. 把所有节点 `_dirty = true`
-4. 把 `_cacheStore = null`（让 WeakMap GC）
-
-### 6.2 问题
-
-连接变更时**全部缓存失效**，即使大部分节点的输入没变。例如：连接 A→B 时，C→D 链的缓存也被清掉，下一帧要全重算。
-
-### 6.3 建议
-
-精细化失效：连接变更时只标记**受影响节点的下游**为 dirty，而不是全部节点。
+`onConnectionsChange` 在 LGraphNode.js 里被调了 20 次（connect/disconnectInput/disconnectOutput 的各种分支），每次都是：
 
 ```js
-rebuildTopology() {
-  this.updateExecutionOrder();
-  this._buildAdjacency();  // O(N+E)
-  
-  // 不再全量失效。只对连接变更涉及的节点调 markDirty。
-  // connectionChange 的调用方（connect/disconnect）已经对受影响节点
-  // 调过 markDirty 了，这里不需要重复。
-  
-  this.dispatchEvent(new CustomEvent("topologyRebuilt", ...));
+if (this.onConnectionsChange) {
+  this.onConnectionsChange(LiteGraph.INPUT/OUTPUT, slot, true/false, link_info, slot_obj);
+}
+if (target_node.onConnectionsChange) {
+  target_node.onConnectionsChange(LiteGraph.OUTPUT/INPUT, slot, true/false, link_info, slot_obj);
+}
+if (this.graph && this.graph.onNodeConnectionChange) {
+  this.graph.onNodeConnectionChange(LiteGraph.OUTPUT/INPUT, ...);
+  this.graph.onNodeConnectionChange(LiteGraph.INPUT/OUTPUT, ...);
 }
 ```
 
-**收益**：连接变更后不需要全图重算，只重算受影响分支。对大图（100+ 节点）收益明显。
+同样的 6-8 行模式重复 20 次。
 
-**风险**：需要确认 `connect`/`disconnectInput`/`disconnectOutput` 里的 `markDirty` 调用覆盖了所有受影响节点。当前代码已经做到了（commit `332f118` 加的）。
+### 建议
 
----
-
-## 七、runStep 双路径简化（低收益、低风险）
-
-### 7.1 现状
-
-`runStep` 根据 `config.optimized_execution` 分两路：
-- `_runStepClassic`：每节点每帧都执行
-- `_runStepOptimized`：dirty 检查 + cache + async
-
-两个路径有重复代码（deferred actions flush、doExecute/onExecute 选择、错误处理）。
-
-### 7.2 建议
-
-合并成一个方法，用 `if (this.config.optimized_execution)` 控制是否做 dirty/cache 检查：
+提取私有方法：
 
 ```js
-runStep(num, do_not_catch_errors, limit) {
-  // ... 公共前置
-  for (let j = 0; j < limit; ++j) {
-    const node = nodes[j];
-    // deferred actions（公共）
-    if (LiteGraph.use_deferred_actions && node._waiting_actions?.length) node.executePendingActions();
-    if (node.mode !== LiteGraph.ALWAYS || !node.onExecute) continue;
-    
-    // 优化路径独有
-    if (this.config.optimized_execution) {
-      if (node.isDirty && !node.isDirty()) continue;
-      if (node.getCachedOutput) { const c = node.getCachedOutput(); if (c != null) { node.applyCachedOutput?.(); continue; } }
-      if (node._isHeavy && this.asyncScheduler && !node._asyncPending) { /* async dispatch */ continue; }
-    }
-    
-    // 执行（公共）
-    if (do_not_catch_errors && node.doExecute) node.doExecute();
-    else node.onExecute();
-    
-    // 优化路径独有后置
-    if (this.config.optimized_execution) {
-      node.storeCachedOutput?.();
-      node.clearDirty?.();
-    }
+_fireConnectionChange(side, slot, isConnect, linkInfo, slotObj, otherNode, otherSide) {
+  if (this.onConnectionsChange) this.onConnectionsChange(side, slot, isConnect, linkInfo, slotObj);
+  if (otherNode && otherNode.onConnectionsChange) otherNode.onConnectionsChange(otherSide, slot, isConnect, linkInfo, slotObj);
+  if (this.graph) {
+    this.graph.onNodeConnectionChange?.(otherSide, otherNode, slot);
+    this.graph.onNodeConnectionChange?.(side, this, slot);
   }
 }
 ```
 
-**收益**：减少 ~100 行重复代码，逻辑更清晰。
+每个调用点变成一行。
 
-**风险**：低，行为完全等价。
+**收益**：~120 行重复代码消除，连接变更逻辑集中一处。
+
+**风险**：低，行为等价。
 
 ---
 
-## 八、优先级排序
+## P4：LGraphCanvas.createDefaultNodeForSlot 调用清理
+
+### 问题
+
+第 1036 行 `this.createDefaultNodeForSlot({...})` 还在 processMouseUp 里被调用，但方法本身已经是 no-op stub（上一轮改的）。这行调用是无意义的。
+
+### 建议
+
+删除 processMouseUp 里对 `createDefaultNodeForSlot` 的调用块（~15 行）。stub 方法本身保留（接口兼容）。
+
+---
+
+## 不做的事（已确认无收益）
+
+1. **不拆 LGraphCanvas.js 成多文件** —— 风险高，收益是可维护性而非复杂度降低，与"减少复杂逻辑"目标不符
+2. **不动 5 策略融合代码** —— 已验证，重复计算消除 80%
+3. **不动 getConnectionPos** —— canvas 13 处调用依赖完整行为
+4. **不动工具函数 LiteGraph.X 挂载** —— 兼容性需要
+5. **不删 drawSubgraphPanel** —— 功能完整，是可用特性不是死代码
+6. **不合并 find*Slot 的对外接口** —— 只合并内部实现，对外保持 7 个方法名
+
+---
+
+## 优先级排序
 
 | 建议 | 行数减少 | 风险 | 优先级 |
 |---|---|---|---|
-| 1.1 删除 nodes.js | 337 | 无 | **P0 立即做** |
-| 1.2 删除 CurveEditor.js | 229 | 无 | **P0 立即做** |
-| 1.3 删除 Widget 渲染代码 | ~500 | 低（保留 stub） | **P0 立即做** |
-| 6 精细化缓存失效 | 0（性能提升） | 中 | **P1** |
-| 7 runStep 双路径合并 | ~100 | 低 | **P1** |
-| 3.3 拆大方法（不拆文件） | 0（可读性） | 低 | P2 |
-| 2.3 EVENT/ACTION 精简（保守） | ~30 | 低 | P2 |
-| 3.2 LGraphCanvas 拆文件 | 0（可维护性） | 中高 | P3 |
+| P0.1 删 onMenu* + getCanvasMenuOptions + getNodeMenuOptions | ~500 | 无 | **立即做** |
+| P0.2 删 prompt + showEditPropertyValue + onShowMenuNodeProperties | ~400 | 无 | **立即做** |
+| P0.3 删 checkPanels | ~50 | 无 | **立即做** |
+| P0.5 删 ContextMenu.js | ~490 | 无（外部不依赖）| **立即做** |
+| P4 删 createDefaultNodeForSlot 调用 | ~15 | 无 | **立即做** |
+| P3 onConnectionsChange 提取公共方法 | ~120 | 低 | P1 |
+| P2 find*Slot 去重 | ~40 | 低 | P1 |
+| P1 processMouseDown 拆分 | 0（可读性）| 低 | P2 |
 
-**P0 总收益**：删除 ~1066 行死代码，占总代码 7%，无任何功能影响。
-
----
-
-## 九、不建议改的
-
-1. **不要动 LiteGraph.js 的常量**（INPUT/OUTPUT/EVENT/ACTION/ALWAYS 等）—— 外部代码依赖
-2. **不要动 `sendActionToCanvas` / `sendEventToAllNodes`** —— canvas 事件桥接需要
-3. **不要动 `getConnectionPos` 的完整实现** —— canvas 13 处调用依赖完整行为
-4. **不要把工具函数从 `LiteGraph.X` 挂载移除** —— 兼容性需要
-5. **不要动 5 策略融合的代码** —— 已运行时验证，重复计算消除 80%
+**P0 总收益**：删除约 1455 行死代码，12824 → ~11370 行（-11%）。
