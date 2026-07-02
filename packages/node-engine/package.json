@@ -1,0 +1,48 @@
+{
+  "name": "node-engine",
+  "version": "0.1.0",
+  "description": "A modernized refactor of litegraph.js — ES6 modules, engine/UI separation, 5-strategy execution optimization, node/slot visibility, Web Worker support.",
+  "main": "dist/node-engine.cjs.js",
+  "module": "dist/node-engine.esm.js",
+  "browser": "dist/node-engine.umd.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "browser": "./dist/node-engine.umd.js",
+      "import": "./dist/node-engine.esm.js",
+      "require": "./dist/node-engine.cjs.js"
+    },
+    "./css/litegraph.css": "./css/litegraph.css"
+  },
+  "files": [
+    "dist/",
+    "css/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node build.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "litegraph",
+    "node-graph",
+    "visual-programming",
+    "node-editor",
+    "graph-editor",
+    "canvas"
+  ],
+  "author": "sonlia",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sonlia/node-engine.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sonlia/node-engine/issues"
+  },
+  "homepage": "https://github.com/sonlia/node-engine#readme",
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  }
+}
