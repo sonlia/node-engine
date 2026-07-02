@@ -337,6 +337,15 @@ class LGraphCanvas {
         canvas.data = this;
         canvas.tabindex = "1";
 
+        // Inline the minimal canvas styles (replaces external litegraph.css).
+        // Only .lgraphcanvas + .lgraphcanvas * are needed — all dialog/menu
+        // CSS has been removed along with those features.
+        canvas.style.userSelect = "none";
+        canvas.style.webkitUserSelect = "none";
+        canvas.style.mozUserSelect = "none";
+        canvas.style.outline = "none";
+        canvas.style.fontFamily = "Tahoma, sans-serif";
+
         // bg canvas: used for non changing stuff
         this.bgcanvas = null;
         if (!this.bgcanvas) {
@@ -4416,189 +4425,6 @@ class LGraphCanvas {
     // createDialog / showSubgraphPropertiesDialog / showSubgraphPropertiesDialogRight
     // removed — subgraph slot editing via popup dialogs is not needed.
 
-    createPanel(title, options) {
-        options = options || {};
-
-        const ref_window = options.window || window;
-        const root = document.createElement("div");
-        root.className = "litegraph dialog";
-        root.innerHTML = "<div class='dialog-header'><span class='dialog-title'></span></div><div class='dialog-content'></div><div style='display:none;' class='dialog-alt-content'></div><div class='dialog-footer'></div>";
-        root.header = root.querySelector(".dialog-header");
-
-        if (options.width)
-            root.style.width = options.width + (options.width.constructor === Number ? "px" : "");
-        if (options.height)
-            root.style.height = options.height + (options.height.constructor === Number ? "px" : "");
-        if (options.closable) {
-            const close = document.createElement("span");
-            close.innerHTML = "&#10005;";
-            close.classList.add("close");
-            close.addEventListener("click", function () {
-                root.close();
-            });
-            root.header.appendChild(close);
-        }
-        root.title_element = root.querySelector(".dialog-title");
-        root.title_element.innerText = title;
-        root.content = root.querySelector(".dialog-content");
-        root.alt_content = root.querySelector(".dialog-alt-content");
-        root.footer = root.querySelector(".dialog-footer");
-
-        root.close = function () {
-            if (root.onClose && typeof root.onClose == "function") {
-                root.onClose();
-            }
-            if (root.parentNode)
-                root.parentNode.removeChild(root);
-            /* XXX CHECK THIS */
-            if (this.parentNode) {
-                this.parentNode.removeChild(this);
-            }
-            /* XXX this was not working, was fixed with an IF, check this */
-        };
-
-        // function to swap panel content
-        root.toggleAltContent = function (force) {
-            let vTo, vAlt;
-            if (typeof force != "undefined") {
-                vTo = force ? "block" : "none";
-                vAlt = force ? "none" : "block";
-            } else {
-                vTo = root.alt_content.style.display != "block" ? "block" : "none";
-                vAlt = root.alt_content.style.display != "block" ? "none" : "block";
-            }
-            root.alt_content.style.display = vTo;
-            root.content.style.display = vAlt;
-        };
-
-        root.toggleFooterVisibility = function (force) {
-            let vTo;
-            if (typeof force != "undefined") {
-                vTo = force ? "block" : "none";
-            } else {
-                vTo = root.footer.style.display != "block" ? "block" : "none";
-            }
-            root.footer.style.display = vTo;
-        };
-
-        root.clear = function () {
-            this.content.innerHTML = "";
-        };
-
-        root.addHTML = function (code, classname, on_footer) {
-            const elem = document.createElement("div");
-            if (classname)
-                elem.className = classname;
-            elem.innerHTML = code;
-            if (on_footer)
-                root.footer.appendChild(elem);
-            else
-                root.content.appendChild(elem);
-            return elem;
-        };
-
-        root.addButton = function (name, callback, options) {
-            const elem = document.createElement("button");
-            elem.innerText = name;
-            elem.options = options;
-            elem.classList.add("btn");
-            elem.addEventListener("click", callback);
-            root.footer.appendChild(elem);
-            return elem;
-        };
-
-        root.addSeparator = function () {
-            const elem = document.createElement("div");
-            elem.className = "separator";
-            root.content.appendChild(elem);
-        };
-
-        root.addWidget = function (type, name, value, options, callback) {
-            options = options || {};
-            let str_value = String(value);
-            type = type.toLowerCase();
-            if (type == "number")
-                str_value = value.toFixed(3);
-
-            const elem = document.createElement("div");
-            elem.className = "property";
-            elem.innerHTML = "<span class='property_name'></span><span class='property_value'></span>";
-            elem.querySelector(".property_name").innerText = options.label || name;
-            const value_element = elem.querySelector(".property_value");
-            value_element.innerText = str_value;
-            elem.dataset["property"] = name;
-            elem.dataset["type"] = options.type || type;
-            elem.options = options;
-            elem.value = value;
-
-            if (type == "code")
-                elem.addEventListener("click", function (e) { root.inner_showCodePad(this.dataset["property"]); });
-            else if (type == "boolean") {
-                elem.classList.add("boolean");
-                if (value)
-                    elem.classList.add("bool-on");
-                elem.addEventListener("click", function () {
-                    const propname = this.dataset["property"];
-                    this.value = !this.value;
-                    this.classList.toggle("bool-on");
-                    this.querySelector(".property_value").innerText = this.value ? "true" : "false";
-                    innerChange(propname, this.value);
-                });
-            } else if (type == "string" || type == "number") {
-                value_element.setAttribute("contenteditable", true);
-                value_element.addEventListener("keydown", function (e) {
-                    if (e.code == "Enter" && (type != "string" || !e.shiftKey)) // allow for multiline
-                    {
-                        e.preventDefault();
-                        this.blur();
-                    }
-                });
-                value_element.addEventListener("blur", function () {
-                    let v = this.innerText;
-                    const propname = this.parentNode.dataset["property"];
-                    const proptype = this.parentNode.dataset["type"];
-                    if (proptype == "number")
-                        v = Number(v);
-                    innerChange(propname, v);
-                });
-            } else if (type == "enum" || type == "combo") {
-                str_value = LGraphCanvas.getPropertyPrintableValue(value, options.values);
-                value_element.innerText = str_value;
-
-                value_element.addEventListener("click", function (event) {
-                    const values = options.values || [];
-                    const propname = this.parentNode.dataset["property"];
-                    const clickedElem = event.currentTarget;
-                    const menu = new ContextMenu(values, {
-                        event: event,
-                        className: "dark",
-                        callback: inner_clicked
-                    },
-                        ref_window);
-                    function inner_clicked(v, option, event) {
-                        clickedElem.innerText = v;
-                        innerChange(propname, v);
-                        return false;
-                    }
-                });
-            }
-
-            root.content.appendChild(elem);
-
-            function innerChange(name, value) {
-                if (options.callback)
-                    options.callback(name, value, options);
-                if (callback)
-                    callback(name, value, options);
-            }
-
-            return elem;
-        };
-
-        if (root.onOpen && typeof root.onOpen == "function") root.onOpen();
-
-        return root;
-    }
 
     closePanels() {
         let panel = document.querySelector("#node-panel");
@@ -4802,27 +4628,6 @@ class LGraphCanvas {
     /**
      * Display graph-level options panel.
      */
-    showShowGraphOptionsPanel(refOpts, event) {
-        const graph = this.graph;
-        if (!graph) return;
-
-        const panel = this.createPanel("Options", { closable: true });
-        this.options_panel = panel;
-        panel.node = null;
-        panel.graph = graph;
-
-        // Add common graph options
-        const optEl = document.createElement("div");
-        optEl.className = "litemenu-entry";
-        optEl.innerHTML = "<span>Live Mode</span><input type='checkbox' class='lgraphconfig' id='live_mode'" + (this.live_mode ? " checked" : "") + ">";
-        optEl.querySelector("input").addEventListener("change", (e) => {
-            this.switchLiveMode(true);
-        });
-        panel.content.appendChild(optEl);
-
-        this.canvas.parentNode.appendChild(panel);
-        return panel;
-    }
 }
 
 // Assign to LiteGraph for compatibility

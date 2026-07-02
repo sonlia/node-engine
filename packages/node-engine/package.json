@@ -11,12 +11,10 @@
       "browser": "./dist/node-engine.umd.js",
       "import": "./dist/node-engine.esm.js",
       "require": "./dist/node-engine.cjs.js"
-    },
-    "./css/litegraph.css": "./css/litegraph.css"
+    }
   },
   "files": [
     "dist/",
-    "css/",
     "README.md",
     "LICENSE"
   ],

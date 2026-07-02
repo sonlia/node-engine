@@ -15,21 +15,8 @@ const outdir = path.resolve(__dirname, "dist");
 // Ensure dist exists
 if (!fs.existsSync(outdir)) fs.mkdirSync(outdir, { recursive: true });
 
-// Ensure css dir exists
-const cssDir = path.resolve(__dirname, "css");
-if (!fs.existsSync(cssDir)) fs.mkdirSync(cssDir, { recursive: true });
-
-// Copy CSS if it exists (from public/ or src/)
-const cssSource = path.resolve(__dirname, "../../public/litegraph.css");
-const cssDest = path.resolve(cssDir, "litegraph.css");
-if (fs.existsSync(cssSource)) {
-  fs.copyFileSync(cssSource, cssDest);
-  console.log("✅ CSS copied");
-} else {
-  // Create a minimal CSS stub if no source exists
-  fs.writeFileSync(cssDest, "/* node-engine canvas styles */\n");
-  console.log("⚠️ No source CSS found, created stub");
-}
+// CSS is no longer needed — canvas styles are inlined in the constructor.
+// (user-select, outline, font-family set via canvas.style.*)
 
 async function build() {
   console.log("Building node-engine npm package...");
