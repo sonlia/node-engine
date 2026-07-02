@@ -41,7 +41,8 @@ async function build() {
     format: "esm",
     outfile: path.join(outdir, "node-engine.esm.js"),
     target: "es2020",
-    sourcemap: true,
+    minify: true,
+    sourcemap: false,
     logLevel: "info",
   });
   console.log("✅ ESM build done");
@@ -53,7 +54,8 @@ async function build() {
     format: "cjs",
     outfile: path.join(outdir, "node-engine.cjs.js"),
     target: "es2020",
-    sourcemap: true,
+    minify: true,
+    sourcemap: false,
     logLevel: "info",
   });
   console.log("✅ CJS build done");
@@ -66,7 +68,8 @@ async function build() {
     globalName: "NodeEngine",
     outfile: path.join(outdir, "node-engine.umd.js"),
     target: "es2020",
-    sourcemap: true,
+    minify: true,
+    sourcemap: false,
     logLevel: "info",
   });
   console.log("✅ UMD build done");
