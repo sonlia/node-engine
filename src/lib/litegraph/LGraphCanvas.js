@@ -1608,7 +1608,15 @@ class LGraphCanvas {
         if (e.target.localName === "input") return;
 
         if (e.type === "keydown") {
-            // Tab — search box removed, let the browser handle Tab normally
+            // Tab key — fires onTabMenu callback if the host has set one.
+            // Hosts (e.g. vuestudio) use this to show a custom node-creation
+            // menu. If no callback is set, Tab is left to the browser.
+            if (e.key === "Tab") {
+                if (this.onTabMenu) {
+                    this.onTabMenu(e);
+                    block_default = true;
+                }
+            }
 
             if (e.keyCode === 32) {
                 // space
@@ -2190,6 +2198,8 @@ class LGraphCanvas {
     isOverNodeInput(node, canvasx, canvasy, slot_pos) {
         if (node.inputs) {
             for (let i = 0, l = node.inputs.length; i < l; ++i) {
+                // Slot visibility: hideOnNode slots are not clickable.
+                if (node.inputs[i] && node.inputs[i].hideOnNode) continue;
                 const link_pos = node.getConnectionPos(true, i);
                 let is_inside = false;
                 if (node.horizontal) {
@@ -2226,6 +2236,8 @@ class LGraphCanvas {
     isOverNodeOutput(node, canvasx, canvasy, slot_pos) {
         if (node.outputs) {
             for (let i = 0, l = node.outputs.length; i < l; ++i) {
+                // Slot visibility: hideOnNode slots are not clickable.
+                if (node.outputs[i] && node.outputs[i].hideOnNode) continue;
                 const link_pos = node.getConnectionPos(false, i);
                 let is_inside = false;
                 if (node.horizontal) {
@@ -2268,6 +2280,10 @@ class LGraphCanvas {
         nodes = nodes || this.graph._nodes;
         for (let i = 0, l = nodes.length; i < l; ++i) {
             const n = nodes[i];
+            // Node visibility: flags.hidden hides a node from rendering
+            // and hit-testing, but it still participates in code generation
+            // (which walks graph._nodes directly, not visible_nodes).
+            if (n.flags && n.flags.hidden) continue;
             if (
                 this.live_mode &&
                 !n.onDrawBackground &&
@@ -2886,6 +2902,9 @@ class LGraphCanvas {
             if (node.inputs) {
                 for (let i = 0; i < node.inputs.length; i++) {
                     const slot = node.inputs[i];
+                    // Slot visibility: hideOnNode skips rendering but
+                    // preserves slot index (doesn't shift other slots).
+                    if (slot.hideOnNode === true) continue;
                     const slot_type = slot.type;
                     let slot_shape = slot.shape;
 
@@ -2988,6 +3007,8 @@ class LGraphCanvas {
             if (node.outputs) {
                 for (let i = 0; i < node.outputs.length; i++) {
                     const slot = node.outputs[i];
+                    // Slot visibility: hideOnNode skips rendering.
+                    if (slot.hideOnNode === true) continue;
                     const slot_type = slot.type;
                     let slot_shape = slot.shape;
 
@@ -3635,6 +3656,19 @@ class LGraphCanvas {
      * @param {number} num_sublines - number of sublines
      */
     renderLink(ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines) {
+        // Link visibility: if either endpoint node is flags.hidden, skip
+        // rendering so there are no dangling lines. The link also won't
+        // enter visible_links, so it's not clickable either.
+        // (link == null means it's a drag-preview line — always render.)
+        if (link && this.graph) {
+            const originNode = this.graph.getNodeById(link.origin_id);
+            const targetNode = this.graph.getNodeById(link.target_id);
+            if ((originNode && originNode.flags && originNode.flags.hidden) ||
+                (targetNode && targetNode.flags && targetNode.flags.hidden)) {
+                return;
+            }
+        }
+
         if (link) {
             this.visible_links.push(link);
         }
@@ -4127,7 +4161,11 @@ class LGraphCanvas {
     }
 
     drawSubgraphPanelLeft(subgraph, subnode, ctx) {
-        const num = subnode.inputs ? subnode.inputs.length : 0;
+        // Slot visibility: hideOnSubgraphPanel hides a slot from the
+        // subgraph inputs panel (but it still exists on the node).
+        const num = subnode.inputs
+            ? subnode.inputs.filter((input) => !input.hideOnSubgraphPanel).length
+            : 0;
         const w = 200;
         const h = Math.floor(LiteGraph.NODE_SLOT_HEIGHT * 1.6);
 
@@ -4154,6 +4192,7 @@ class LGraphCanvas {
             for (let i = 0; i < subnode.inputs.length; ++i) {
                 const input = subnode.inputs[i];
                 if (input.not_subgraph_input) continue;
+                if (input.hideOnSubgraphPanel) continue;
 
                 if (this.drawButton(20, y + 2, w - 20, h - 2)) {
                     const type =
@@ -4189,7 +4228,13 @@ class LGraphCanvas {
     }
 
     drawSubgraphPanelRight(subgraph, subnode, ctx) {
-        const num = subnode.outputs ? subnode.outputs.length : 0;
+        // Slot visibility: hideOnSubgraphPanel and hideOnNode both hide
+        // a slot from the subgraph outputs panel.
+        const num = subnode.outputs
+            ? subnode.outputs.filter(
+                  (output) => !(output.hideOnSubgraphPanel || output.hideOnNode)
+              ).length
+            : 0;
         const canvas_w = this.bgcanvas.width;
         const w = 200;
         const h = Math.floor(LiteGraph.NODE_SLOT_HEIGHT * 1.6);
@@ -4221,6 +4266,7 @@ class LGraphCanvas {
             for (let i = 0; i < subnode.outputs.length; ++i) {
                 const output = subnode.outputs[i];
                 if (output.not_subgraph_input) continue;
+                if (output.hideOnSubgraphPanel || output.hideOnNode) continue;
 
                 if (this.drawButton(canvas_w - w, y + 2, w - 20, h - 2)) {
                     const type =

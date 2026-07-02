@@ -474,6 +474,16 @@ class LGraph extends EventTarget {
   }
 
   /**
+   * Execute one step of the graph (alias for runStep(1)).
+   * Provided for hosts that prefer the "runOnce" naming convention
+   * (e.g. vuestudio's codeStrategies flow). Triggers onAfterStep
+   * callback just like runStep.
+   */
+  runOnce(do_not_catch_errors) {
+    this.runStep(1, do_not_catch_errors);
+  }
+
+  /**
    * Lazy / on-demand execution (Strategy 2 + Strategy 4 fusion).
    *
    * Walks the dependency chain backwards from `targetNode`, ensuring

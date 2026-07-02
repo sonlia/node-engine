@@ -41,6 +41,7 @@ import {
 _setLiteGraphRef(LiteGraph);
 
 LiteGraph._LGraphNode = LGraphNode;
+LiteGraph.LGraphNode = LGraphNode; // public alias for prototype overrides
 LiteGraph.LGraph = LGraph;
 LiteGraph.LLink = LLink;
 LiteGraph.LGraphGroup = LGraphGroup;

@@ -317,6 +317,9 @@ class LGraphNode extends EventTarget {
     // this node's cache and propagates dirty downstream so the next run
     // only recomputes affected branches.
     this.markDirty();
+    // Notify graph-level change listeners (vuestudio compat: on_change
+    // triggers UI refresh / auto-save).
+    if (this.graph && this.graph.on_change) this.graph.on_change(this);
   }
 
   addProperty(name, defaultValue, type, extraInfo) {
@@ -1423,9 +1426,22 @@ class LGraphNode extends EventTarget {
     } else {
       out[0] = this.pos[0] + this.size[0] + 1 - offset;
     }
+    // Slot visibility: when computing the Y position, skip slots marked
+    // hideOnNode so they don't take up vertical space — visible slots
+    // collapse to fill the gap. The slot index passed in still refers to
+    // the original array position; we count only non-hidden slots before it.
+    let effective_slot_index = 0;
+    const arr = is_input ? this.inputs : this.outputs;
+    if (arr) {
+      for (let i = 0; i < slot_number; ++i) {
+        if (arr[i] && !arr[i].hideOnNode) {
+          effective_slot_index++;
+        }
+      }
+    }
     out[1] =
       this.pos[1] +
-      (slot_number + 0.7) * LiteGraph.NODE_SLOT_HEIGHT +
+      (effective_slot_index + 0.7) * LiteGraph.NODE_SLOT_HEIGHT +
       (this.constructor.slot_start_y || 0);
     return out;
   }
@@ -1571,6 +1587,118 @@ class LGraphNode extends EventTarget {
       }
     }
     return -1;
+  }
+
+  // ===================== SLOT BY ID (vuestudio compat) =====================
+  // These methods find/update/remove slots by their .id field (uuid).
+  // Useful when slot order may change but a stable identifier is needed.
+
+  /** Find input slot index by slot.id. Returns -1 if not found. */
+  findInputSlotById(slotId) {
+    if (!this.inputs) return -1;
+    for (let i = 0; i < this.inputs.length; i++) {
+      if (this.inputs[i] && this.inputs[i].id === slotId) return i;
+    }
+    return -1;
+  }
+
+  /** Find output slot index by slot.id. Returns -1 if not found. */
+  findOutputSlotById(slotId) {
+    if (!this.outputs) return -1;
+    for (let i = 0; i < this.outputs.length; i++) {
+      if (this.outputs[i] && this.outputs[i].id === slotId) return i;
+    }
+    return -1;
+  }
+
+  /**
+   * Find slot by id. Returns { isInput, index, slot } or null.
+   * @param {string} slotId
+   * @returns {{isInput: boolean, index: number, slot: Object}|null}
+   */
+  findSlotById(slotId) {
+    let idx = this.findInputSlotById(slotId);
+    if (idx !== -1) return { isInput: true, index: idx, slot: this.inputs[idx] };
+    idx = this.findOutputSlotById(slotId);
+    if (idx !== -1) return { isInput: false, index: idx, slot: this.outputs[idx] };
+    return null;
+  }
+
+  /** Update an output slot's name by slot.id. Returns true on success. */
+  updateOutputSlotNameById(slotId, name) {
+    const idx = this.findOutputSlotById(slotId);
+    if (idx === -1) return false;
+    this.outputs[idx].name = name;
+    return true;
+  }
+
+  /** Update an input slot's name by slot.id. Returns true on success. */
+  updateInputSlotNameById(slotId, name) {
+    const idx = this.findInputSlotById(slotId);
+    if (idx === -1) return false;
+    this.inputs[idx].name = name;
+    return true;
+  }
+
+  /**
+   * Update slot properties by id. `updates` is merged into the slot object.
+   * @param {string} slotId
+   * @param {Object} updates - partial slot properties to merge
+   * @param {boolean} isInput - true for input, false for output
+   * @returns {boolean} true on success
+   */
+  updateSlotById(slotId, updates, isInput) {
+    const idx = isInput
+      ? this.findInputSlotById(slotId)
+      : this.findOutputSlotById(slotId);
+    if (idx === -1) return false;
+    const arr = isInput ? this.inputs : this.outputs;
+    Object.assign(arr[idx], updates);
+    return true;
+  }
+
+  /** Remove an output slot by slot.id. Returns true on success. */
+  removeOutputSlotById(slotId) {
+    const idx = this.findOutputSlotById(slotId);
+    if (idx === -1) return false;
+    this.removeOutput(idx);
+    return true;
+  }
+
+  /** Remove an input slot by slot.id. Returns true on success. */
+  removeInputSlotById(slotId) {
+    const idx = this.findInputSlotById(slotId);
+    if (idx === -1) return false;
+    this.removeInput(idx);
+    return true;
+  }
+
+  /** Remove a slot (input or output) by slot.id. Returns true on success. */
+  removeSlotById(slotId) {
+    if (this.removeInputSlotById(slotId)) return true;
+    if (this.removeOutputSlotById(slotId)) return true;
+    return false;
+  }
+
+  /**
+   * Batch update multiple slot names.
+   * @param {Array<{slotId: string, name: string}>} updates
+   * @param {boolean} refreshCanvas - if true, call setDirtyCanvas once at end
+   * @returns {number} count of successfully updated slots
+   */
+  batchUpdateSlotNames(updates, refreshCanvas = true) {
+    let count = 0;
+    for (const { slotId, name } of updates) {
+      const result = this.findSlotById(slotId);
+      if (result) {
+        result.slot.name = name;
+        count++;
+      }
+    }
+    if (refreshCanvas && count > 0 && this.graph) {
+      this.graph.setDirtyCanvas?.(true, true);
+    }
+    return count;
   }
 
   // ===================== SIZE & LAYOUT =====================
