@@ -18,10 +18,7 @@
     "README.md",
     "LICENSE"
   ],
-  "scripts": {
-    "build": "node build.js",
-    "prepublishOnly": "npm run build"
-  },
+  "scripts": {},
   "keywords": [
     "litegraph",
     "node-graph",
@@ -39,8 +36,5 @@
   "bugs": {
     "url": "https://github.com/sonlia/node-engine/issues"
   },
-  "homepage": "https://github.com/sonlia/node-engine#readme",
-  "devDependencies": {
-    "esbuild": "^0.25.12"
-  }
+  "homepage": "https://github.com/sonlia/node-engine#readme"
 }
