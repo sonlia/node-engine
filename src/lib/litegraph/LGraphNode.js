@@ -560,45 +560,58 @@ class LGraphNode extends EventTarget {
 
   setOutputData(slot, data) {
     if (!this.outputs) return;
-    if (slot >= 0 && slot < this.outputs.length) {
-      const output = this.outputs[slot];
+    if (slot < 0 || slot >= this.outputs.length) return;
+    const output = this.outputs[slot];
+    if (!output) return;
 
-      // Strategy 1 guard — value-equality short-circuit.
-      // If the new value is identical to the existing output, skip the
-      // downstream dirty cascade entirely. This is THE critical optimization
-      // for static graphs: a Number(42) → Math(+) → Display chain only
-      // executes ONCE on the first frame, then every subsequent frame is
-      // a no-op because 42 === 42.
-      //
-      // For objects we use reference equality (===) — if the upstream
-      // produces a new instance every time, downstream re-executes (correct).
-      // If it reuses the same instance and mutates in place, the upstream
-      // must call markDirty() explicitly to signal the change.
-      const prev = output._data;
-      if (prev === data) return;
-      // NaN !== NaN, so handle NaN explicitly to avoid spurious dirty cascades
-      // when a math node outputs NaN every frame.
-      if (prev !== prev && data !== data) return;
+    // valueMode dispatch (vuestudio compat): if the slot has a valueMode,
+    // override the data being written with a derived string. "orderSlot"
+    // type is excluded (execution trigger channel, native write).
+    //
+    //   valueMode === "label"       → data = slot.name
+    //   valueMode === "placeholder" → data = slot.placeholderTemplate || slot.name
+    if (output.type !== "orderSlot") {
+      const mode = output.valueMode;
+      if (mode === "label") data = output.name;
+      else if (mode === "placeholder")
+        data = output.placeholderTemplate || output.name;
+    }
 
-      // Original keeps both an `_data` debug copy on the output slot AND
-      // propagates the value to every live link's `.data` field. Downstream
-      // nodes read it back via `getInputData` → `link.data`.
-      output._data = data;
-      if (output.links && this.graph) {
-        for (let i = 0; i < output.links.length; i++) {
-          const link = this.graph.links[output.links[i]];
-          if (link) {
-            link.data = data;
-          }
+    // Strategy 1 guard — value-equality short-circuit.
+    // If the new value is identical to the existing output, skip the
+    // downstream dirty cascade entirely. This is THE critical optimization
+    // for static graphs: a Number(42) → Math(+) → Display chain only
+    // executes ONCE on the first frame, then every subsequent frame is
+    // a no-op because 42 === 42.
+    //
+    // For objects we use reference equality (===) — if the upstream
+    // produces a new instance every time, downstream re-executes (correct).
+    // If it reuses the same instance and mutates in place, the upstream
+    // must call markDirty() explicitly to signal the change.
+    const prev = output._data;
+    if (prev === data) return;
+    // NaN !== NaN, so handle NaN explicitly to avoid spurious dirty cascades
+    // when a math node outputs NaN every frame.
+    if (prev !== prev && data !== data) return;
+
+    // Original keeps both an `_data` debug copy on the output slot AND
+    // propagates the value to every live link's `.data` field. Downstream
+    // nodes read it back via `getInputData` → `link.data`.
+    output._data = data;
+    if (output.links && this.graph) {
+      for (let i = 0; i < output.links.length; i++) {
+        const link = this.graph.links[output.links[i]];
+        if (link) {
+          link.data = data;
         }
       }
-
-      // Strategy 1 (Reactive Dirty Marking): output mutation invalidates
-      // downstream caches so the next run recomputes them. This is reached
-      // only when the value actually changed (see equality check above),
-      // so spurious dirty cascades are eliminated.
-      this._markDownstreamDirty(slot);
     }
+
+    // Strategy 1 (Reactive Dirty Marking): output mutation invalidates
+    // downstream caches so the next run recomputes them. This is reached
+    // only when the value actually changed (see equality check above),
+    // so spurious dirty cascades are eliminated.
+    this._markDownstreamDirty(slot);
   }
 
   /**
@@ -659,7 +672,28 @@ class LGraphNode extends EventTarget {
 
   getInputData(slot, force_update) {
     if (!this.inputs) return;
-    if (slot >= this.inputs.length || this.inputs[slot].link == null) return;
+    if (slot >= this.inputs.length) return;
+
+    // valueMode dispatch (vuestudio compat): if the slot has a valueMode
+    // set, return a derived string instead of the wire value. This is
+    // independent of connection state — even unconnected slots return
+    // the label/placeholder. "orderSlot" type is excluded (execution
+    // trigger channel, always walks the native path).
+    //
+    //   valueMode === "label"       → return slot.name (variable name)
+    //   valueMode === "placeholder" → return slot.placeholderTemplate || slot.name
+    //
+    // Used by code-generation hosts where slots carry variable names /
+    // placeholder tokens rather than runtime values.
+    const input_info = this.inputs[slot];
+    if (input_info && input_info.type !== "orderSlot") {
+      const mode = input_info.valueMode;
+      if (mode === "label") return input_info.name;
+      if (mode === "placeholder")
+        return input_info.placeholderTemplate || input_info.name;
+    }
+
+    if (this.inputs[slot].link == null) return;
 
     const linkId = this.inputs[slot].link;
     const link = this.graph ? this.graph.links[linkId] : null;
