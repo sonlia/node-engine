@@ -1,6 +1,6 @@
 {
   "name": "@sonlia/node-engine",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A modernized refactor of litegraph.js — ES6 modules, engine/UI separation, 5-strategy execution optimization, node/slot visibility, Web Worker support.",
   "main": "dist/node-engine.cjs.js",
   "module": "dist/node-engine.esm.js",
@@ -39,5 +39,8 @@
   "homepage": "https://github.com/sonlia/node-engine#readme",
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.1"
   }
 }
