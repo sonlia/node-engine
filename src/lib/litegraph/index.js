@@ -49,6 +49,9 @@ LiteGraph.LGraphCanvas = LGraphCanvas;
 LiteGraph.DragAndScale = DragAndScale;
 LiteGraph.WorkerScheduler = WorkerScheduler;
 
+// Initialize default type inheritance (int→number, float→number, vec→vector, etc.)
+LiteGraph._initDefaultTypes();
+
 // Register utility functions on LiteGraph for API compatibility.
 // In the original IIFE every one of these helpers was attached to the
 // global LiteGraph object (e.g. `LiteGraph.compareObjects(...)`). Without

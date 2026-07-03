@@ -104,7 +104,22 @@ class LGraphCanvas {
             output_off: "#778",
             output_on: "#7F7",
         };
-        this.default_connection_color_byType = {};
+        // Default colors by type — makes different types visually distinct
+        // without requiring the user to set colors manually. Users can
+        // override by setting graphcanvas.default_connection_color_byType["myType"].
+        this.default_connection_color_byType = {
+            number: "#AAA",
+            int: "#A9C",
+            float: "#9CA",
+            string: "#CCA",
+            boolean: "#AAC",
+            array: "#CAC",
+            object: "#ACA",
+            vector: "#AC9",
+            vec2: "#AC9",
+            vec3: "#9AC",
+            vec4: "#9CA",
+        };
         this.default_connection_color_byTypeOff = {};
 
         // Rendering flags

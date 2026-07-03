@@ -193,6 +193,60 @@ class LiteGraphClass {
     return false;
   }
 
+  /**
+   * Get all registered type names (including subtypes registered via
+   * registerTypeInheritance).
+   * @returns {string[]}
+   */
+  static getRegisteredTypes() {
+    const types = new Set();
+    // Types from slot registration
+    for (const t of LiteGraph.slot_types_in) types.add(t);
+    for (const t of LiteGraph.slot_types_out) types.add(t);
+    // Types from inheritance registration
+    for (const sub of Object.keys(LiteGraph._typeHierarchy)) {
+      types.add(sub);
+      for (const parent of LiteGraph._typeHierarchy[sub]) {
+        types.add(parent);
+      }
+    }
+    return Array.from(types);
+  }
+
+  /**
+   * Get all direct subtypes of a parent type.
+   * @param {string} parentType
+   * @returns {string[]}
+   */
+  static getSubtypesOf(parentType) {
+    parentType = String(parentType).toLowerCase();
+    const result = [];
+    for (const [sub, parents] of Object.entries(LiteGraph._typeHierarchy)) {
+      if (parents.includes(parentType)) result.push(sub);
+    }
+    return result;
+  }
+
+  /**
+   * Register default type inheritance relationships and colors.
+   * Called automatically on module load. Users can override by calling
+   * registerTypeInheritance again (it's idempotent).
+   */
+  static _initDefaultTypes() {
+    // Numeric hierarchy: int/float → number
+    LiteGraph.registerTypeInheritance("int", "number");
+    LiteGraph.registerTypeInheritance("float", "number");
+    LiteGraph.registerTypeInheritance("uint", "number");
+    // Vector hierarchy: vec2/vec3/vec4 → vector
+    LiteGraph.registerTypeInheritance("vec2", "vector");
+    LiteGraph.registerTypeInheritance("vec3", "vector");
+    LiteGraph.registerTypeInheritance("vec4", "vector");
+    // vec types are also numeric (can feed into number inputs)
+    LiteGraph.registerTypeInheritance("vec2", "number");
+    LiteGraph.registerTypeInheritance("vec3", "number");
+    LiteGraph.registerTypeInheritance("vec4", "number");
+  }
+
   // ===================== BEHAVIOR =====================
   static alt_drag_do_clone_nodes = false;
   static middle_click_slot_add_default_node = false;
