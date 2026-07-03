@@ -245,6 +245,63 @@ class LiteGraphClass {
     LiteGraph.registerTypeInheritance("vec2", "number");
     LiteGraph.registerTypeInheritance("vec3", "number");
     LiteGraph.registerTypeInheritance("vec4", "number");
+
+    // Default type shapes (parent type → shape, children inherit)
+    LiteGraph.setTypeShape("number", LiteGraph.CIRCLE_SHAPE);
+    LiteGraph.setTypeShape("string", LiteGraph.BOX_SHAPE);
+    LiteGraph.setTypeShape("boolean", LiteGraph.BOX_SHAPE);
+    LiteGraph.setTypeShape("vector", LiteGraph.ARROW_SHAPE);
+    LiteGraph.setTypeShape("object", LiteGraph.ROUND_SHAPE);
+    LiteGraph.setTypeShape("array", LiteGraph.GRID_SHAPE);
+  }
+
+  // ===================== TYPE VISUALS =====================
+  // Maps parent type → shape. Child types (a/b) inherit parent's shape.
+  // Set via LiteGraph.setTypeShape("number", LiteGraph.CIRCLE_SHAPE).
+  static type_shapes = {};
+
+  /**
+   * Set the shape for a type (and all its subtypes via / hierarchy).
+   * @param {string} type — parent type (e.g. "number", "string")
+   * @param {number} shape — LiteGraph.CIRCLE_SHAPE / BOX_SHAPE / etc.
+   */
+  static setTypeShape(type, shape) {
+    LiteGraph.type_shapes[String(type).toLowerCase()] = shape;
+  }
+
+  /**
+   * Get the shape for a type. Falls back to parent type (via / hierarchy).
+   * @param {string} type — e.g. "number/int" → checks "number/int", then "number"
+   * @returns {number|undefined}
+   */
+  static getTypeShape(type) {
+    if (!type) return undefined;
+    type = String(type).toLowerCase();
+    // Direct match
+    if (LiteGraph.type_shapes[type] != null) return LiteGraph.type_shapes[type];
+    // Walk up / hierarchy
+    const segs = type.split("/");
+    for (let i = segs.length - 1; i > 0; i--) {
+      const parent = segs.slice(0, i).join("/");
+      if (LiteGraph.type_shapes[parent] != null) return LiteGraph.type_shapes[parent];
+    }
+    return undefined;
+  }
+
+  /**
+   * Batch set type info (color + shape).
+   * @param {Object} info — { "number": { color: "#AAA", shape: 3 }, "string": { color: "#CCA", shape: 1 } }
+   */
+  static setTypeInfo(info) {
+    for (const [type, cfg] of Object.entries(info)) {
+      if (cfg.shape != null) LiteGraph.setTypeShape(type, cfg.shape);
+      // Colors are set on graphcanvas.default_connection_color_byType,
+      // but we also store them here for reference.
+      if (cfg.color) {
+        if (!LiteGraph._typeColors) LiteGraph._typeColors = {};
+        LiteGraph._typeColors[type.toLowerCase()] = cfg.color;
+      }
+    }
   }
 
   // ===================== BEHAVIOR =====================
@@ -729,10 +786,28 @@ class LiteGraphClass {
   }
 
   /**
-   * Check if two slot types are compatible for connection
+   * Check if two slot types are compatible for connection.
+   *
+   * Type syntax:
+   *   "a"          — plain type
+   *   "a/b"        — subtype of a (hierarchical, unlimited depth: a/b/c)
+   *   "*" or 0     — wildcard, matches everything
+   *   "-type"      — exclusion: matches everything EXCEPT this type (and its subtypes)
+   *   "a,b"        — multi-type: valid if ANY combination matches
+   *
+   * Connection rules (checked in order):
+   *   1. Wildcard: * or 0 matches anything
+   *   2. Exclusion: -type blocks connection if the OTHER side matches type
+   *   3. Exact match: a/b === a/b
+   *   4. / hierarchy: types sharing a common prefix segment are compatible
+   *      a/b connects to a/c (common prefix "a")
+   *      a/b connects to a   (common prefix "a")
+   *      a/b does NOT connect to d/e (no common prefix)
+   *   5. registerTypeInheritance: fallback for non-/ types (int → number)
+   *   6. Multi-type: comma-separated, any permutation match wins
    */
   static isValidConnection(typeA, typeB) {
-    // Normalize "" / "*" to 0 (wildcard / any type). 0 already means any.
+    // Normalize "" / "*" to 0 (wildcard / any type).
     if (typeA === "" || typeA === "*") typeA = 0;
     if (typeB === "" || typeB === "*") typeB = 0;
     // Wildcard short-circuit (covers 0, null, undefined).
@@ -743,32 +818,32 @@ class LiteGraphClass {
       return true;
     }
 
-    if (
-      typeA === typeB
-      // EVENT/ACTION cross-linking removed — the event execution model
-      // is gone. EVENT and ACTION are now treated as opaque type sentinels
-      // that only connect to themselves (covered by typeA === typeB above).
-    ) {
-      return true;
-    }
-
-    // Enforce string comparison
     typeA = String(typeA);
     typeB = String(typeB);
-    if (typeA.toLowerCase() === typeB.toLowerCase()) return true;
 
-    // Type inheritance check: if typeA is a subtype of typeB (or vice
-    // versa), the connection is valid. This allows e.g. an "int" output
-    // to connect to a "number" input, because int is a subtype of number.
-    // Registration: LiteGraph.registerTypeInheritance("int", "number")
-    if (LiteGraph.isSubtypeOf(typeA, typeB)) return true;
-    if (LiteGraph.isSubtypeOf(typeB, typeA)) return true;
+    // Handle exclusion syntax: "-type" means "everything except this type"
+    // If one side is an exclusion, check if the OTHER side matches the
+    // excluded type. If it does → reject. If not → accept (exclusion
+    // acts as a wildcard for non-matching types).
+    const exclA = typeA.startsWith("-");
+    const exclB = typeB.startsWith("-");
+    if (exclA || exclB) {
+      if (exclA && exclB) {
+        // Both are exclusions: -a vs -b → always compatible (neither blocks)
+        return true;
+      }
+      if (exclA) {
+        // typeA = "-number", typeB = "number/int" → blocked
+        // typeA = "-number", typeB = "string"     → allowed
+        const excludedType = typeA.slice(1);
+        return !LiteGraph._typeMatches(typeB, excludedType);
+      }
+      // exclB
+      const excludedType = typeB.slice(1);
+      return !LiteGraph._typeMatches(typeA, excludedType);
+    }
 
-    // Multi-type slots: comma-separated type lists. A connection is valid
-    // when ANY permutation of the two lists is itself valid. (Earlier
-    // refactored versions only compared `split(",")[0]`, which silently
-    // rejected overlapping multi-type slots like "string,number" vs
-    // "number,float".)
+    // Multi-type slots: comma-separated. Split and check all permutations.
     if (typeA.indexOf(",") !== -1 || typeB.indexOf(",") !== -1) {
       const supportedA = typeA.split(",");
       const supportedB = typeB.split(",");
@@ -782,6 +857,46 @@ class LiteGraphClass {
       return false;
     }
 
+    // Exact match (case-insensitive)
+    if (typeA.toLowerCase() === typeB.toLowerCase()) return true;
+
+    // / hierarchy check: split by "/" and compare segments.
+    // If they share at least the first segment (common parent), they're compatible.
+    const segA = typeA.toLowerCase().split("/");
+    const segB = typeB.toLowerCase().split("/");
+    if (segA[0] === segB[0] && segA[0] !== "") {
+      return true;
+    }
+
+    // Fallback: registerTypeInheritance (for non-/ types like "int" → "number")
+    if (LiteGraph.isSubtypeOf(typeA, typeB)) return true;
+    if (LiteGraph.isSubtypeOf(typeB, typeA)) return true;
+
+    return false;
+  }
+
+  /**
+   * Helper: check if `typeStr` matches `matchType` (including / hierarchy).
+   * Used by exclusion logic. "number/int" matches "number" (parent match).
+   * @private
+   */
+  static _typeMatches(typeStr, matchType) {
+    typeStr = String(typeStr).toLowerCase();
+    matchType = String(matchType).toLowerCase();
+    if (typeStr === matchType) return true;
+    // / hierarchy: "number/int" matches "number" (parent)
+    const segStr = typeStr.split("/");
+    const segMatch = matchType.split("/");
+    // If matchType is a prefix of typeStr → match
+    if (segStr.length >= segMatch.length) {
+      let prefix = true;
+      for (let i = 0; i < segMatch.length; i++) {
+        if (segStr[i] !== segMatch[i]) { prefix = false; break; }
+      }
+      if (prefix) return true;
+    }
+    // Also check registerTypeInheritance
+    if (LiteGraph.isSubtypeOf(typeStr, matchType)) return true;
     return false;
   }
 

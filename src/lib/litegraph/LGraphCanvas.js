@@ -2195,6 +2195,44 @@ class LGraphCanvas {
      *                          when false, returns the exact drawn rect.
      * @returns {[number, number, number, number]} [x, y, w, h] in world coords
      */
+    /**
+     * Get the color for a slot type. Priority:
+     *   1. default_connection_color_byType[exact type] (e.g. "number/int")
+     *   2. default_connection_color_byType[parent type] (e.g. "number" for "number/int")
+     *   3. LiteGraph._typeColors[exact] / [parent]
+     *   4. default_link_color fallback
+     *
+     * This means you only need to set colors for parent types (number, string, etc.)
+     * and all subtypes (number/int, number/float) automatically inherit the parent
+     * color. To give a subtype a distinct color, set it explicitly:
+     *   graphcanvas.default_connection_color_byType["number/int"] = "#F00"
+     */
+    getSlotColor(type, isOff) {
+        if (!type && type !== 0) return this.default_link_color;
+        type = String(type);
+        const byType = isOff
+            ? this.default_connection_color_byTypeOff
+            : this.default_connection_color_byType;
+        // 1. Exact match
+        if (byType[type]) return byType[type];
+        // 2. Walk up / hierarchy for parent type color
+        const segs = type.split("/");
+        for (let i = segs.length - 1; i > 0; i--) {
+            const parent = segs.slice(0, i).join("/");
+            if (byType[parent]) return byType[parent];
+        }
+        // 3. LiteGraph._typeColors
+        if (LiteGraph._typeColors) {
+            if (LiteGraph._typeColors[type.toLowerCase()]) return LiteGraph._typeColors[type.toLowerCase()];
+            for (let i = segs.length - 1; i > 0; i--) {
+                const parent = segs.slice(0, i).join("/").toLowerCase();
+                if (LiteGraph._typeColors[parent]) return LiteGraph._typeColors[parent];
+            }
+        }
+        // 4. Fallback
+        return this.default_link_color;
+    }
+
     getNodeBoxRect(node, forHit = true) {
         const th = LiteGraph.NODE_TITLE_HEIGHT;
         const boxSize = 10;
@@ -2930,7 +2968,8 @@ class LGraphCanvas {
                     // preserves slot index (doesn't shift other slots).
                     if (slot.hideOnNode === true) continue;
                     const slot_type = slot.type;
-                    let slot_shape = slot.shape;
+                    // Shape priority: slot.shape > LiteGraph.getTypeShape(type) > undefined
+                    let slot_shape = slot.shape || LiteGraph.getTypeShape(slot_type);
 
                     ctx.globalAlpha = editor_alpha;
                     // change opacity of incompatible slots when dragging a connection
@@ -2944,11 +2983,10 @@ class LGraphCanvas {
                     ctx.fillStyle =
                         slot.link != null
                             ? slot.color_on ||
-                              this.default_connection_color_byType[slot_type] ||
+                              this.getSlotColor(slot_type, false) ||
                               this.default_connection_color.input_on
                             : slot.color_off ||
-                              this.default_connection_color_byTypeOff[slot_type] ||
-                              this.default_connection_color_byType[slot_type] ||
+                              this.getSlotColor(slot_type, true) ||
                               this.default_connection_color.input_off;
 
                     const pos = node.getConnectionPos(true, i, slot_pos);
@@ -3034,7 +3072,8 @@ class LGraphCanvas {
                     // Slot visibility: hideOnNode skips rendering.
                     if (slot.hideOnNode === true) continue;
                     const slot_type = slot.type;
-                    let slot_shape = slot.shape;
+                    // Shape priority: slot.shape > LiteGraph.getTypeShape(type) > undefined
+                    let slot_shape = slot.shape || LiteGraph.getTypeShape(slot_type);
 
                     // change opacity of incompatible slots when dragging a connection
                     if (
@@ -3058,11 +3097,10 @@ class LGraphCanvas {
                     ctx.fillStyle =
                         slot.links && slot.links.length
                             ? slot.color_on ||
-                              this.default_connection_color_byType[slot_type] ||
+                              this.getSlotColor(slot_type, false) ||
                               this.default_connection_color.output_on
                             : slot.color_off ||
-                              this.default_connection_color_byTypeOff[slot_type] ||
-                              this.default_connection_color_byType[slot_type] ||
+                              this.getSlotColor(slot_type, true) ||
                               this.default_connection_color.output_off;
                     ctx.beginPath();
 
