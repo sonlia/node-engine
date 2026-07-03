@@ -307,8 +307,8 @@ export default function Home() {
     (window as any).__graph = graph;
     (window as any).__LiteGraph = LiteGraph;
 
-    graphCanvas.background_image = null;
-    graphCanvas.clear_background_color = '#1a1a2e';
+    graphCanvas.background_image = LGraphCanvas.DEFAULT_BACKGROUND_IMAGE;
+    graphCanvas.clear_background_color = '#222';
     graphCanvas.render_shadows = true;
     graphCanvas.render_connections_border = true;
     graphCanvas.render_curved_connections = true;
