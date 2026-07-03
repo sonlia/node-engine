@@ -132,6 +132,67 @@ class LiteGraphClass {
   static slot_types_default_in = [];
   static slot_types_default_out = [];
 
+  // ===================== TYPE INHERITANCE =====================
+  // Maps a subtype string to an array of parent type strings.
+  // e.g. _typeHierarchy["int"] = ["number"]
+  //      _typeHierarchy["float"] = ["number"]
+  //      _typeHierarchy["vec3"] = ["vector", "number"]
+  // isValidConnection checks: if typeA is a subtype of typeB (directly or
+  // transitively), the connection is valid.
+  // Register via LiteGraph.registerTypeInheritance("int", "number").
+  static _typeHierarchy = {};
+
+  /**
+   * Register a type inheritance relationship.
+   * After registration, an output slot of `subtype` can connect to an
+   * input slot of `parentType` (but NOT the reverse — parent cannot
+   * connect to child input unless the child accepts the parent type).
+   *
+   * Multiple parents are supported — call this method once per parent.
+   *
+   * @param {string} subtype - the child type (e.g. "int", "float", "vec3")
+   * @param {string} parentType - the parent type (e.g. "number", "vector")
+   */
+  static registerTypeInheritance(subtype, parentType) {
+    subtype = String(subtype).toLowerCase();
+    parentType = String(parentType).toLowerCase();
+    if (subtype === parentType) return;
+    if (!LiteGraph._typeHierarchy[subtype]) {
+      LiteGraph._typeHierarchy[subtype] = [];
+    }
+    if (!LiteGraph._typeHierarchy[subtype].includes(parentType)) {
+      LiteGraph._typeHierarchy[subtype].push(parentType);
+    }
+  }
+
+  /**
+   * Check if `subtype` is a (transitive) subtype of `parentType`.
+   * @param {string} subtype
+   * @param {string} parentType
+   * @returns {boolean}
+   */
+  static isSubtypeOf(subtype, parentType) {
+    subtype = String(subtype).toLowerCase();
+    parentType = String(parentType).toLowerCase();
+    if (subtype === parentType) return true;
+    const parents = LiteGraph._typeHierarchy[subtype];
+    if (!parents) return false;
+    // Direct check
+    if (parents.includes(parentType)) return true;
+    // Transitive check (BFS)
+    const visited = new Set([subtype]);
+    const queue = [...parents];
+    while (queue.length) {
+      const current = queue.shift();
+      if (current === parentType) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      const grandparents = LiteGraph._typeHierarchy[current];
+      if (grandparents) queue.push(...grandparents);
+    }
+    return false;
+  }
+
   // ===================== BEHAVIOR =====================
   static alt_drag_do_clone_nodes = false;
   static middle_click_slot_add_default_node = false;
@@ -641,6 +702,13 @@ class LiteGraphClass {
     typeA = String(typeA);
     typeB = String(typeB);
     if (typeA.toLowerCase() === typeB.toLowerCase()) return true;
+
+    // Type inheritance check: if typeA is a subtype of typeB (or vice
+    // versa), the connection is valid. This allows e.g. an "int" output
+    // to connect to a "number" input, because int is a subtype of number.
+    // Registration: LiteGraph.registerTypeInheritance("int", "number")
+    if (LiteGraph.isSubtypeOf(typeA, typeB)) return true;
+    if (LiteGraph.isSubtypeOf(typeB, typeA)) return true;
 
     // Multi-type slots: comma-separated type lists. A connection is valid
     // when ANY permutation of the two lists is itself valid. (Earlier
