@@ -1,0 +1,2002 @@
+     1→/**
+     2→ * LGraphNode - Base class for all node types
+     3→ * 
+     4→ * Refactored from a constructor function + prototype to ES6 class.
+     5→ * Original: function LGraphNode(title) { this._ctor(title); }
+     6→ * 
+     7→ * Key changes:
+     8→ * - Constructor body replaces _ctor()
+     9→ * - All prototype methods become class methods
+    10→ * - Object.defineProperty for 'pos' replaced with ES6 get/set
+    11→ * - Mixin inheritance replaced by proper class extension
+    12→ */
+    13→
+    14→import { LiteGraph } from "./LiteGraph.js";
+    15→import { cloneObject, uuidv4, isInsideRectangle } from "./utils.js";
+    16→
+    17→class LGraphNode {
+    18→  constructor(title) {
+    19→    this.title = title || "Unnamed";
+    20→    this.size = [LiteGraph.NODE_WIDTH, 60];
+    21→    this.graph = null;
+    22→    this._pos = new Float32Array([10, 10]);
+    23→    this.id = LiteGraph.use_uuids ? uuidv4() : -1;
+    24→    this.type = null;
+    25→
+    26→    // Inputs/outputs slots
+    27→    this.inputs = [];
+    28→    this.outputs = [];
+    29→    this.connections = [];
+    30→
+    31→    // Local data
+    32→    this.properties = {};
+    33→    this.properties_info = [];
+    34→    this.flags = {};
+    35→
+    36→    // Execution mode: 0=ALWAYS, 1=ON_EVENT, 2=NEVER, 3=ON_TRIGGER
+    37→    this.mode = LiteGraph.ALWAYS;
+    38→
+    39→    // Rendering/execution state
+    40→    this._shape = null;
+    41→    this._waiting_actions = [];
+    42→
+    43→    // Exec slots for explicit execution-order control.
+    44→    // These are special slots (type 'exec_in' / 'exec_out') that every node
+    45→    // has implicitly. They are NOT stored in this.inputs/this.outputs (to avoid
+    46→    // breaking existing node logic that expects specific slot indices), but
+    47→    // are exposed via getExecInput()/getExecOutput() and rendered separately
+    48→    // at the top-left/top-right of the node.
+    49→    // When an exec_in slot is connected, the node only executes when the
+    50→    // upstream exec_out fires — overriding the default ALWAYS mode.
+    51→    this._exec_input = null;   // { link: linkId | null }
+    52→    this._exec_output = null;  // { links: [linkId, ...] | null }
+    53→    this._exec_connected = false; // true when exec_in has an incoming link
+    54→  }
+    55→
+    56→  /**
+    57→   * Get (or lazily create) the exec input slot.
+    58→   * Returns a slot-like object { name, type, link, _isExec }.
+    59→   */
+    60→  getExecInput() {
+    61→    if (!this._exec_input) {
+    62→      this._exec_input = {
+    63→        name: "exec_in",
+    64→        type: "exec_in",
+    65→        link: null,
+    66→        _isExec: true,
+    67→      };
+    68→    }
+    69→    return this._exec_input;
+    70→  }
+    71→
+    72→  /**
+    73→   * Get (or lazily create) the exec output slot.
+    74→   * Returns a slot-like object { name, type, links, _isExec }.
+    75→   */
+    76→  getExecOutput() {
+    77→    if (!this._exec_output) {
+    78→      this._exec_output = {
+    79→        name: "exec_out",
+    80→        type: "exec_out",
+    81→        links: null,
+    82→        _isExec: true,
+    83→      };
+    84→    }
+    85→    return this._exec_output;
+    86→  }
+    87→
+    88→  /**
+    89→   * Returns true if this node has an incoming exec connection.
+    90→   * When true, the node only executes via exec flow (not ALWAYS mode).
+    91→   */
+    92→  hasExecInput() {
+    93→    return !!(this._exec_input && this._exec_input.link != null);
+    94→  }
+    95→
+    96→  /**
+    97→   * Trigger execution of this node (called when exec_in fires).
+    98→   * Subclasses can override to add pre/post hooks.
+    99→   */
+   100→  exec(param) {
+   101→    if (this.onExecute) {
+   102→      this.onExecute(param);
+   103→    }
+   104→    // Forward to exec_out (next node in chain)
+   105→    this.triggerExecOut(param);
+   106→  }
+   107→
+   108→  /**
+   109→   * Fire the exec_out slot, triggering all connected downstream nodes.
+   110→   */
+   111→  triggerExecOut(param) {
+   112→    const execOut = this._exec_output;
+   113→    if (!execOut || !execOut.links || !this.graph) return;
+   114→    for (const linkId of execOut.links) {
+   115→      const link = this.graph.links[linkId];
+   116→      if (!link) continue;
+   117→      const targetNode = this.graph.getNodeById(link.target_id);
+   118→      if (targetNode && targetNode.exec) {
+   119→        targetNode.exec(param);
+   120→      }
+   121→    }
+   122→  }
+   123→
+   124→  /**
+   125→   * Connect this node's exec_out to targetNode's exec_in.
+   126→   * Creates an LLink with type 'exec_out' and registers it in graph.links.
+   127→   * Returns the created link or null on failure.
+   128→   */
+   129→  connectExec(targetNode) {
+   130→    if (!this.graph) {
+   131→      console.log("connectExec: node doesn't belong to any graph");
+   132→      return null;
+   133→    }
+   134→    if (!targetNode || targetNode === this) return null;
+   135→
+   136→    const execOut = this.getExecOutput();
+   137→    const execIn = targetNode.getExecInput();
+   138→
+   139→    // Generate link id
+   140→    const linkId = LiteGraph.use_uuids
+   141→      ? uuidv4()
+   142→      : ++this.graph.last_link_id;
+   143→
+   144→    // Create the link
+   145→    const LLinkCtor = LiteGraph.LLink || LiteGraph._LLink;
+   146→    const link = LLinkCtor
+   147→      ? new LLinkCtor(linkId, 'exec_out', this.id, -1, targetNode.id, -1)
+   148→      : {
+   149→          id: linkId,
+   150→          type: 'exec_out',
+   151→          origin_id: this.id,
+   152→          origin_slot: -1,
+   153→          target_id: targetNode.id,
+   154→          target_slot: -1,
+   155→          _data: null,
+   156→          _pos: new Float32Array(2),
+   157→        };
+   158→
+   159→    this.graph.links[linkId] = link;
+   160→    this.graph._version++;
+   161→
+   162→    // Connect in exec_out
+   163→    if (!execOut.links) execOut.links = [];
+   164→    execOut.links.push(linkId);
+   165→
+   166→    // Connect in exec_in (exec_in only allows one incoming connection)
+   167→    if (execIn.link != null) {
+   168→      // Disconnect existing exec_in link first
+   169→      const oldLink = this.graph.links[execIn.link];
+   170→      if (oldLink) {
+   171→        const oldOrigin = this.graph.getNodeById(oldLink.origin_id);
+   172→        if (oldOrigin && oldOrigin._exec_output && oldOrigin._exec_output.links) {
+   173→          const idx = oldOrigin._exec_output.links.indexOf(execIn.link);
+   174→          if (idx !== -1) oldOrigin._exec_output.links.splice(idx, 1);
+   175→        }
+   176→        delete this.graph.links[execIn.link];
+   177→      }
+   178→    }
+   179→    execIn.link = linkId;
+   180→
+   181→    return link;
+   182→  }
+   183→
+   184→  /**
+   185→   * Disconnect this node's exec_in (remove incoming exec connection).
+   186→   */
+   187→  disconnectExecIn() {
+   188→    const execIn = this._exec_input;
+   189→    if (!execIn || execIn.link == null || !this.graph) return false;
+   190→
+   191→    const linkId = execIn.link;
+   192→    const link = this.graph.links[linkId];
+   193→    if (link) {
+   194→      const originNode = this.graph.getNodeById(link.origin_id);
+   195→      if (originNode && originNode._exec_output && originNode._exec_output.links) {
+   196→        const idx = originNode._exec_output.links.indexOf(linkId);
+   197→        if (idx !== -1) originNode._exec_output.links.splice(idx, 1);
+   198→      }
+   199→      delete this.graph.links[linkId];
+   200→    }
+   201→    execIn.link = null;
+   202→    this.graph._version++;
+   203→    return true;
+   204→  }
+   205→
+   206→  // ===================== POSITION GETTER/SETTER =====================
+   207→  // Replaces Object.defineProperty from original code
+   208→
+   209→  get pos() {
+   210→    return this._pos;
+   211→  }
+   212→
+   213→  set pos(v) {
+   214→    if (!v || v.length < 2) return;
+   215→    this._pos[0] = v[0];
+   216→    this._pos[1] = v[1];
+   217→  }
+   218→
+   219→  get shape() {
+   220→    return this._shape;
+   221→  }
+   222→
+   223→  set shape(v) {
+   224→    switch (v) {
+   225→      case "default": delete this._shape; break;
+   226→      case "box": this._shape = LiteGraph.BOX_SHAPE; break;
+   227→      case "round": this._shape = LiteGraph.ROUND_SHAPE; break;
+   228→      case "circle": this._shape = LiteGraph.CIRCLE_SHAPE; break;
+   229→      case "card": this._shape = LiteGraph.CARD_SHAPE; break;
+   230→      default: this._shape = v;
+   231→    }
+   232→  }
+   233→
+   234→  // ===================== SERIALIZATION =====================
+   235→
+   236→  /**
+   237→   * Configure this node from a serialized info object
+   238→   */
+   239→  configure(info) {
+   240→    if (this.graph) {
+   241→      this.graph._version++;
+   242→    }
+   243→
+   244→    for (const j in info) {
+   245→      if (j === "properties") {
+   246→        for (const k in info.properties) {
+   247→          this.properties[k] = info.properties[k];
+   248→          if (this.onPropertyChanged) {
+   249→            this.onPropertyChanged(k, info.properties[k]);
+   250→          }
+   251→        }
+   252→        continue;
+   253→      }
+   254→
+   255→      if (info[j] == null) {
+   256→        continue;
+   257→      } else if (typeof info[j] === "object") {
+   258→        if (this[j] && this[j].configure) {
+   259→          this[j].configure(info[j]);
+   260→        } else {
+   261→          this[j] = cloneObject(info[j], this[j]);
+   262→        }
+   263→      } else {
+   264→        this[j] = info[j];
+   265→      }
+   266→    }
+   267→
+   268→    if (!info.title) {
+   269→      this.title = this.constructor.title;
+   270→    }
+   271→
+   272→    // Notify connections
+   273→    if (this.inputs) {
+   274→      for (let i = 0; i < this.inputs.length; ++i) {
+   275→        const input = this.inputs[i];
+   276→        const linkInfo = this.graph ? this.graph.links[input.link] : null;
+   277→        if (this.onConnectionsChange) {
+   278→          this.onConnectionsChange(LiteGraph.INPUT, i, true, linkInfo, input);
+   279→        }
+   280→        if (this.onInputAdded) {
+   281→          this.onInputAdded(input);
+   282→        }
+   283→      }
+   284→    }
+   285→
+   286→    if (this.outputs) {
+   287→      for (let i = 0; i < this.outputs.length; ++i) {
+   288→        const output = this.outputs[i];
+   289→        if (!output.links) continue;
+   290→        for (let j = 0; j < output.links.length; ++j) {
+   291→          const linkInfo = this.graph ? this.graph.links[output.links[j]] : null;
+   292→          if (this.onConnectionsChange) {
+   293→            this.onConnectionsChange(LiteGraph.OUTPUT, i, true, linkInfo, output);
+   294→          }
+   295→        }
+   296→        if (this.onOutputAdded) {
+   297→          this.onOutputAdded(output);
+   298→        }
+   299→      }
+   300→    }
+   301→
+   302→    if (this.onConfigure) {
+   303→      this.onConfigure(info);
+   304→    }
+   305→  }
+   306→
+   307→  /**
+   308→   * Serialize this node to a plain object
+   309→   */
+   310→  serialize() {
+   311→    const o = {
+   312→      id: this.id,
+   313→      type: this.type,
+   314→      pos: this.pos,
+   315→      size: this.size,
+   316→      flags: cloneObject(this.flags),
+   317→      order: this.order,
+   318→      mode: this.mode,
+   319→    };
+   320→
+   321→    // Special case for when there were errors
+   322→    if (this.constructor === LGraphNode && this.last_serialization) {
+   323→      return this.last_serialization;
+   324→    }
+   325→
+   326→    if (this.inputs) o.inputs = this.inputs;
+   327→    if (this.outputs) {
+   328→      for (let i = 0; i < this.outputs.length; i++) {
+   329→        delete this.outputs[i]._data;
+   330→      }
+   331→      o.outputs = this.outputs;
+   332→    }
+   333→
+   334→    if (this.title && this.title !== this.constructor.title) {
+   335→      o.title = this.title;
+   336→    }
+   337→
+   338→    if (this.properties) {
+   339→      o.properties = cloneObject(this.properties);
+   340→    }
+   341→
+   342→    if (!o.type) {
+   343→      o.type = this.constructor.type;
+   344→    }
+   345→
+   346→    // Restore visual-style fields so saved graphs keep node appearance.
+   347→    if (this.color) o.color = this.color;
+   348→    if (this.bgcolor) o.bgcolor = this.bgcolor;
+   349→    if (this.boxcolor) o.boxcolor = this.boxcolor;
+   350→    if (this.shape) o.shape = this.shape;
+   351→
+   352→    if (this.onSerialize) {
+   353→      if (this.onSerialize(o)) {
+   354→        console.warn(
+   355→          "node onSerialize shouldnt return anything, data should be stored in the object pass in the first parameter"
+   356→        );
+   357→      }
+   358→    }
+   359→
+   360→    return o;
+   361→  }
+   362→
+   363→  // ===================== CLONE =====================
+   364→
+   365→  clone() {
+   366→    const cloned = LiteGraph.createNode(this.type);
+   367→    if (!cloned) return null;
+   368→
+   369→    // Deep-clone the serialize output (otherwise shared arrays/objects
+   370→    // would be mutated when the clone is configured).
+   371→    const data = cloneObject(this.serialize());
+   372→
+   373→    // Sever input/output links so the clone starts disconnected.
+   374→    if (data.inputs) {
+   375→      for (let i = 0; i < data.inputs.length; ++i) {
+   376→        data.inputs[i].link = null;
+   377→      }
+   378→    }
+   379→    if (data.outputs) {
+   380→      for (let i = 0; i < data.outputs.length; ++i) {
+   381→        if (data.outputs[i].links) {
+   382→          data.outputs[i].links.length = 0;
+   383→        }
+   384→      }
+   385→    }
+   386→
+   387→    delete data["id"];
+   388→    if (LiteGraph.use_uuids) {
+   389→      data["id"] = LiteGraph.uuidv4();
+   390→    }
+   391→
+   392→    cloned.configure(data);
+   393→    return cloned;
+   394→  }
+   395→
+   396→  toString() {
+   397→    // Match original: full JSON of serialize() output.
+   398→    return JSON.stringify(this.serialize());
+   399→  }
+   400→
+   401→  // ===================== PROPERTIES =====================
+   402→
+   403→  getTitle() {
+   404→    return this.title || this.constructor.title;
+   405→  }
+   406→
+   407→  setProperty(name, value) {
+   408→    if (!this.properties) this.properties = {};
+   409→    // No-op short-circuit: avoid firing callbacks when nothing changed.
+   410→    if (value === this.properties[name]) return;
+   411→    const prevValue = this.properties[name];
+   412→    this.properties[name] = value;
+   413→    if (this.onPropertyChanged) {
+   414→      // Allow the handler to veto (return false) and revert the change.
+   415→      if (this.onPropertyChanged(name, value, prevValue) === false) {
+   416→        this.properties[name] = prevValue;
+   417→      }
+   418→    }
+   419→  }
+   420→
+   421→  addProperty(name, defaultValue, type, extraInfo) {
+   422→    const o = { name: name, type: type, default_value: defaultValue };
+   423→    if (extraInfo) {
+   424→      for (const i in extraInfo) o[i] = extraInfo[i];
+   425→    }
+   426→    if (!this.properties_info) this.properties_info = [];
+   427→    this.properties_info.push(o);
+   428→    if (typeof defaultValue === "function") {
+   429→      this.properties[name] = defaultValue();
+   430→    } else {
+   431→      this.properties[name] = defaultValue;
+   432→    }
+   433→    return o;
+   434→  }
+   435→
+   436→  getPropertyInfo(property) {
+   437→    let info = null;
+   438→
+   439→    // There are several ways to define info about a property.
+   440→    // Legacy mode: search in this.properties_info.
+   441→    if (this.properties_info) {
+   442→      for (let i = 0; i < this.properties_info.length; ++i) {
+   443→        if (this.properties_info[i].name === property) {
+   444→          info = this.properties_info[i];
+   445→          break;
+   446→        }
+   447→      }
+   448→    }
+   449→    // Litescene mode using the constructor.
+   450→    if (this.constructor["@" + property]) {
+   451→      info = this.constructor["@" + property];
+   452→    }
+   453→    if (this.constructor.widgets_info && this.constructor.widgets_info[property]) {
+   454→      info = this.constructor.widgets_info[property];
+   455→    }
+   456→    // Litescene mode using the constructor callback.
+   457→    if (!info && this.onGetPropertyInfo) {
+   458→      info = this.onGetPropertyInfo(property);
+   459→    }
+   460→
+   461→    if (!info) info = {};
+   462→    if (!info.type) {
+   463→      info.type = typeof this.properties[property];
+   464→    }
+   465→    if (info.widget === "combo") {
+   466→      info.type = "enum";
+   467→    }
+   468→    return info;
+   469→  }
+   470→
+   471→  // ===================== DATA FLOW =====================
+   472→
+   473→  setOutputData(slot, data) {
+   474→    if (!this.outputs) return;
+   475→    if (slot >= 0 && slot < this.outputs.length) {
+   476→      const output = this.outputs[slot];
+   477→      // Original keeps both an `_data` debug copy on the output slot AND
+   478→      // propagates the value to every live link's `.data` field. Downstream
+   479→      // nodes read it back via `getInputData` → `link.data`.
+   480→      output._data = data;
+   481→      if (output.links && this.graph) {
+   482→        for (let i = 0; i < output.links.length; i++) {
+   483→          const link = this.graph.links[output.links[i]];
+   484→          if (link) {
+   485→            link.data = data;
+   486→          }
+   487→        }
+   488→      }
+   489→    }
+   490→  }
+   491→
+   492→  setOutputDataType(slot, type) {
+   493→    if (!this.outputs) return;
+   494→    if (slot >= 0 && slot < this.outputs.length) {
+   495→      const output = this.outputs[slot];
+   496→      output.type = type;
+   497→      // Mirror the type onto every live link so downstream type inference
+   498→      // (getInputDataType) keeps working after a runtime type change.
+   499→      if (output.links && this.graph) {
+   500→        for (let i = 0; i < output.links.length; i++) {
+   501→          const link = this.graph.links[output.links[i]];
+   502→          if (link) {
+   503→            link.type = type;
+   504→          }
+   505→        }
+   506→      }
+   507→    }
+   508→  }
+   509→
+   510→  getInputData(slot, force_update) {
+   511→    if (!this.inputs) return;
+   512→    if (slot >= this.inputs.length || this.inputs[slot].link == null) return;
+   513→
+   514→    const linkId = this.inputs[slot].link;
+   515→    const link = this.graph ? this.graph.links[linkId] : null;
+   516→    if (!link) return null;
+   517→
+   518→    if (!force_update) return link.data;
+   519→
+   520→    // Pull fresh data from the upstream node.
+   521→    const node = this.graph.getNodeById(link.origin_id);
+   522→    if (!node) return link.data;
+   523→    if (node.updateOutputData) node.updateOutputData(link.origin_slot);
+   524→    else if (node.onExecute) node.onExecute();
+   525→    return link.data;
+   526→  }
+   527→
+   528→  getInputDataType(slot) {
+   529→    if (!this.inputs) return null;
+   530→    if (slot >= 0 && slot < this.inputs.length) {
+   531→      const input = this.inputs[slot];
+   532→      if (!input) return null;
+   533→      const linkId = input.link;
+   534→      if (linkId != null && this.graph) {
+   535→        const link = this.graph.links[linkId];
+   536→        if (link) {
+   537→          // Original looks up the *upstream output slot's* type so a
+   538→          // runtime type change on the source is reflected here.
+   539→          const node = this.graph.getNodeById(link.origin_id);
+   540→          if (node && node.outputs && node.outputs[link.origin_slot]) {
+   541→            return node.outputs[link.origin_slot].type;
+   542→          }
+   543→        }
+   544→      }
+   545→      return input.type;
+   546→    }
+   547→    return null;
+   548→  }
+   549→
+   550→  getInputDataByName(name, force_update) {
+   551→    if (!this.inputs) return null;
+   552→    const slot = this.findInputSlot(name);
+   553→    if (slot === -1) return null;
+   554→    return this.getInputData(slot, force_update);
+   555→  }
+   556→
+   557→  isInputConnected(slot) {
+   558→    if (!this.inputs) return false;
+   559→    return slot >= 0 && slot < this.inputs.length && this.inputs[slot].link != null;
+   560→  }
+   561→
+   562→  getInputInfo(slot) {
+   563→    if (!this.inputs) return null;
+   564→    if (slot >= 0 && slot < this.inputs.length) return this.inputs[slot];
+   565→    return null;
+   566→  }
+   567→
+   568→  getInputLink(slot) {
+   569→    if (!this.inputs) return null;
+   570→    if (slot < this.inputs.length) {
+   571→      const linkId = this.inputs[slot].link;
+   572→      return this.graph ? this.graph.links[linkId] : null;
+   573→    }
+   574→    return null;
+   575→  }
+   576→
+   577→  getInputNode(slot) {
+   578→    if (!this.inputs) return null;
+   579→    if (slot >= 0 && slot < this.inputs.length) {
+   580→      const linkId = this.inputs[slot].link;
+   581→      if (linkId != null) {
+   582→        const link = this.graph ? this.graph.links[linkId] : null;
+   583→        if (link) return this.graph.getNodeById(link.origin_id);
+   584→      }
+   585→    }
+   586→    return null;
+   587→  }
+   588→
+   589→  getInputOrProperty(name) {
+   590→    if (!this.inputs) return this.properties[name];
+   591→    for (let i = 0; i < this.inputs.length; ++i) {
+   592→      if (name === this.inputs[i].name) {
+   593→        const data = this.getInputData(i);
+   594→        if (data !== undefined && data !== null) return data;
+   595→      }
+   596→    }
+   597→    return this.properties[name];
+   598→  }
+   599→
+   600→  getOutputData(slot) {
+   601→    if (!this.outputs) return undefined;
+   602→    if (slot >= 0 && slot < this.outputs.length) return this.outputs[slot]._data;
+   603→    return null;
+   604→  }
+   605→
+   606→  getOutputInfo(slot) {
+   607→    if (!this.outputs) return null;
+   608→    if (slot >= 0 && slot < this.outputs.length) return this.outputs[slot];
+   609→    return null;
+   610→  }
+   611→
+   612→  isOutputConnected(slot) {
+   613→    if (!this.outputs) return false;
+   614→    return slot >= 0 && slot < this.outputs.length && this.outputs[slot].links && this.outputs[slot].links.length > 0;
+   615→  }
+   616→
+   617→  isAnyOutputConnected() {
+   618→    if (!this.outputs) return false;
+   619→    for (let i = 0; i < this.outputs.length; ++i) {
+   620→      if (this.outputs[i].links && this.outputs[i].links.length > 0) return true;
+   621→    }
+   622→    return false;
+   623→  }
+   624→
+   625→  getOutputNodes(slot) {
+   626→    if (!this.outputs || slot < 0 || slot >= this.outputs.length) return null;
+   627→    const output = this.outputs[slot];
+   628→    if (!output.links) return null;
+   629→    const r = [];
+   630→    for (let i = 0; i < output.links.length; i++) {
+   631→      const linkId = output.links[i];
+   632→      const link = this.graph ? this.graph.links[linkId] : null;
+   633→      if (link) {
+   634→        const targetNode = this.graph.getNodeById(link.target_id);
+   635→        if (targetNode) r.push(targetNode);
+   636→      }
+   637→    }
+   638→    return r;
+   639→  }
+   640→
+   641→  // ===================== SLOT MANAGEMENT =====================
+   642→
+   643→  addInput(name, type, extraInfo) {
+   644→    type = type || 0;
+   645→    const o = { name: name, type: type, link: null };
+   646→    if (extraInfo) {
+   647→      for (const i in extraInfo) o[i] = extraInfo[i];
+   648→    }
+   649→    if (!this.inputs) this.inputs = [];
+   650→    this.inputs.push(o);
+   651→    this.setSize(this.computeSize());
+   652→    if (this.onInputAdded) this.onInputAdded(o);
+   653→    // Register slot type so global type-based lookups (connectByType /
+   654→    // findSlotByType) can find this slot at runtime.
+   655→    LiteGraph.registerNodeAndSlotType(this, type);
+   656→    this.setDirtyCanvas(true, true);
+   657→    return o;
+   658→  }
+   659→
+   660→  addInputs(list) {
+   661→    // Original input format: array of triplets like [[name, type, extra_info], ...]
+   662→    for (let i = 0; i < list.length; ++i) {
+   663→      const info = list[i];
+   664→      const o = { name: info[0], type: info[1], link: null };
+   665→      if (info[2]) {
+   666→        for (const j in info[2]) o[j] = info[2][j];
+   667→      }
+   668→      if (!this.inputs) this.inputs = [];
+   669→      this.inputs.push(o);
+   670→      if (this.onInputAdded) this.onInputAdded(o);
+   671→      LiteGraph.registerNodeAndSlotType(this, info[1]);
+   672→    }
+   673→    this.setSize(this.computeSize());
+   674→    this.setDirtyCanvas(true, true);
+   675→  }
+   676→
+   677→  removeInput(slot) {
+   678→    this.disconnectInput(slot);
+   679→    const input = this.inputs.splice(slot, 1)[0];
+   680→    // Reindex links still attached to higher-indexed inputs so they keep
+   681→    // pointing at the right slot — matches the original behaviour.
+   682→    if (this.inputs && this.graph) {
+   683→      for (let i = slot; i < this.inputs.length; ++i) {
+   684→        const input = this.inputs[i];
+   685→        if (!input || input.link == null) continue;
+   686→        const link = this.graph.links[input.link];
+   687→        if (link) link.target_slot -= 1;
+   688→      }
+   689→    }
+   690→    this.setSize(this.computeSize());
+   691→    if (this.onInputRemoved) this.onInputRemoved(slot, input && input.name);
+   692→    this.setDirtyCanvas(true, true);
+   693→    return input;
+   694→  }
+   695→
+   696→  addOutput(name, type, extraInfo) {
+   697→    const o = { name: name, type: type, links: null };
+   698→    if (extraInfo) {
+   699→      for (const i in extraInfo) o[i] = extraInfo[i];
+   700→    }
+   701→    if (!this.outputs) this.outputs = [];
+   702→    this.outputs.push(o);
+   703→    if (this.onOutputAdded) this.onOutputAdded(o);
+   704→    // Match original: only auto-register when auto_load_slot_types is on
+   705→    // (avoids polluting the slot type registry during static class setup).
+   706→    if (LiteGraph.auto_load_slot_types)
+   707→      LiteGraph.registerNodeAndSlotType(this, type, true);
+   708→    this.setSize(this.computeSize());
+   709→    this.setDirtyCanvas(true, true);
+   710→    return o;
+   711→  }
+   712→
+   713→  addOutputs(list) {
+   714→    // Original input format: array of triplets like [[name, type, extra_info], ...]
+   715→    for (let i = 0; i < list.length; ++i) {
+   716→      const info = list[i];
+   717→      const o = { name: info[0], type: info[1], links: null };
+   718→      if (info[2]) {
+   719→        for (const j in info[2]) o[j] = info[2][j];
+   720→      }
+   721→      if (!this.outputs) this.outputs = [];
+   722→      this.outputs.push(o);
+   723→      if (this.onOutputAdded) this.onOutputAdded(o);
+   724→      if (LiteGraph.auto_load_slot_types)
+   725→        LiteGraph.registerNodeAndSlotType(this, info[1], true);
+   726→    }
+   727→    this.setSize(this.computeSize());
+   728→    this.setDirtyCanvas(true, true);
+   729→  }
+   730→
+   731→  removeOutput(slot) {
+   732→    this.disconnectOutput(slot);
+   733→    const output = this.outputs.splice(slot, 1)[0];
+   734→    // Reindex links still attached to higher-indexed outputs so they keep
+   735→    // pointing at the right slot — otherwise the graph structure corrupts
+   736→    // after a slot is removed.
+   737→    if (this.outputs && this.graph) {
+   738→      for (let i = slot; i < this.outputs.length; ++i) {
+   739→        const output = this.outputs[i];
+   740→        if (!output || !output.links) continue;
+   741→        for (let j = 0; j < output.links.length; ++j) {
+   742→          const link = this.graph.links[output.links[j]];
+   743→          if (link) link.origin_slot -= 1;
+   744→        }
+   745→      }
+   746→    }
+   747→    this.setSize(this.computeSize());
+   748→    if (this.onOutputRemoved) this.onOutputRemoved(slot);
+   749→    this.setDirtyCanvas(true, true);
+   750→    return output;
+   751→  }
+   752→
+   753→  // ===================== CONNECTION =====================
+   754→
+   755→  /**
+   756→   * Connect this node's output slot to a target node's input slot.
+   757→   * Restored original signature & full validation/event flow.
+   758→   * Returns the created LLink on success, null on failure.
+   759→   * @param {number|string} slot - output slot index or name
+   760→   * @param {LGraphNode|number} target_node - target node or its id
+   761→   * @param {number|string} target_slot - input slot index, name, or LiteGraph.EVENT (-1) for trigger
+   762→   */
+   763→  connect(slot, target_node, target_slot) {
+   764→    target_slot = target_slot || 0;
+   765→
+   766→    if (!this.graph) {
+   767→      console.log(
+   768→        "Connect: Error, node doesn't belong to any graph. Nodes must be added first to a graph before connecting them."
+   769→      );
+   770→      return null;
+   771→    }
+   772→
+   773→    // Seek for the output slot (by name or index)
+   774→    if (slot && slot.constructor === String) {
+   775→      slot = this.findOutputSlot(slot);
+   776→      if (slot == -1) {
+   777→        if (LiteGraph.debug) console.log("Connect: Error, no slot of name " + slot);
+   778→        return null;
+   779→      }
+   780→    } else if (!this.outputs || slot >= this.outputs.length) {
+   781→      if (LiteGraph.debug) console.log("Connect: Error, slot number not found");
+   782→      return null;
+   783→    }
+   784→
+   785→    if (target_node && target_node.constructor === Number) {
+   786→      target_node = this.graph.getNodeById(target_node);
+   787→    }
+   788→    if (!target_node) {
+   789→      throw new Error("target node is null");
+   790→    }
+   791→
+   792→    // Avoid loopback
+   793→    if (target_node === this) {
+   794→      return null;
+   795→    }
+   796→
+   797→    // Seek for the input slot (by name, index, or EVENT for trigger)
+   798→    if (target_slot && target_slot.constructor === String) {
+   799→      target_slot = target_node.findInputSlot(target_slot);
+   800→      if (target_slot == -1) {
+   801→        if (LiteGraph.debug)
+   802→          console.log("Connect: Error, no slot of name " + target_slot);
+   803→        return null;
+   804→      }
+   805→    } else if (target_slot === LiteGraph.EVENT) {
+   806→      if (LiteGraph.do_add_triggers_slots) {
+   807→        target_node.changeMode(LiteGraph.ON_TRIGGER);
+   808→        target_slot = target_node.findInputSlot("onTrigger");
+   809→      } else {
+   810→        return null;
+   811→      }
+   812→    } else if (!target_node.inputs || target_slot >= target_node.inputs.length) {
+   813→      if (LiteGraph.debug) console.log("Connect: Error, slot number not found");
+   814→      return null;
+   815→    }
+   816→
+   817→    let changed = false;
+   818→    const input = target_node.inputs[target_slot];
+   819→    let link_info = null;
+   820→    const output = this.outputs[slot];
+   821→
+   822→    if (!this.outputs[slot]) {
+   823→      return null;
+   824→    }
+   825→
+   826→    // Allow target node to redirect the slot at connect time
+   827→    if (target_node.onBeforeConnectInput) {
+   828→      target_slot = target_node.onBeforeConnectInput(target_slot);
+   829→    }
+   830→
+   831→    // Validate type compatibility
+   832→    if (
+   833→      target_slot === false ||
+   834→      target_slot === null ||
+   835→      !LiteGraph.isValidConnection(output.type, input.type)
+   836→    ) {
+   837→      this.setDirtyCanvas(false, true);
+   838→      if (changed) this.graph.connectionChange(this, link_info);
+   839→      return null;
+   840→    }
+   841→
+   842→    // Allow nodes to veto the connection
+   843→    if (target_node.onConnectInput) {
+   844→      if (
+   845→        target_node.onConnectInput(target_slot, output.type, output, this, slot) === false
+   846→      ) {
+   847→        return null;
+   848→      }
+   849→    }
+   850→    if (this.onConnectOutput) {
+   851→      if (
+   852→        this.onConnectOutput(slot, input.type, input, target_node, target_slot) === false
+   853→      ) {
+   854→        return null;
+   855→      }
+   856→    }
+   857→
+   858→    // If something is already plugged at the target input, disconnect it first
+   859→    if (
+   860→      target_node.inputs[target_slot] &&
+   861→      target_node.inputs[target_slot].link != null
+   862→    ) {
+   863→      this.graph.beforeChange();
+   864→      target_node.disconnectInput(target_slot, { doProcessChange: false });
+   865→      changed = true;
+   866→    }
+   867→
+   868→    // For EVENT outputs, optionally enforce single-output
+   869→    if (output.links !== null && output.links.length) {
+   870→      switch (output.type) {
+   871→        case LiteGraph.EVENT:
+   872→          if (!LiteGraph.allow_multi_output_for_events) {
+   873→            this.graph.beforeChange();
+   874→            this.disconnectOutput(slot, false, { doProcessChange: false });
+   875→            changed = true;
+   876→          }
+   877→          break;
+   878→        default:
+   879→          break;
+   880→      }
+   881→    }
+   882→
+   883→    // Generate next link id
+   884→    let nextId;
+   885→    if (LiteGraph.use_uuids) nextId = LiteGraph.uuidv4();
+   886→    else nextId = ++this.graph.last_link_id;
+   887→
+   888→    // Create the link
+   889→    const LLinkCtor = LiteGraph.LLink || LiteGraph._LLink;
+   890→    link_info = LLinkCtor
+   891→      ? new LLinkCtor(
+   892→          nextId,
+   893→          input.type || output.type,
+   894→          this.id,
+   895→          slot,
+   896→          target_node.id,
+   897→          target_slot
+   898→        )
+   899→      : {
+   900→          id: nextId,
+   901→          type: input.type || output.type,
+   902→          origin_id: this.id,
+   903→          origin_slot: slot,
+   904→          target_id: target_node.id,
+   905→          target_slot: target_slot,
+   906→          _data: null,
+   907→          _pos: new Float32Array(2),
+   908→        };
+   909→
+   910→    this.graph.links[link_info.id] = link_info;
+   911→
+   912→    if (output.links == null) output.links = [];
+   913→    output.links.push(link_info.id);
+   914→    target_node.inputs[target_slot].link = link_info.id;
+   915→
+   916→    if (this.graph) this.graph._version++;
+   917→
+   918→    if (this.onConnectionsChange) {
+   919→      this.onConnectionsChange(LiteGraph.OUTPUT, slot, true, link_info, output);
+   920→    }
+   921→    if (target_node.onConnectionsChange) {
+   922→      target_node.onConnectionsChange(
+   923→        LiteGraph.INPUT,
+   924→        target_slot,
+   925→        true,
+   926→        link_info,
+   927→        input
+   928→      );
+   929→    }
+   930→    if (this.graph && this.graph.onNodeConnectionChange) {
+   931→      this.graph.onNodeConnectionChange(
+   932→        LiteGraph.INPUT,
+   933→        target_node,
+   934→        target_slot,
+   935→        this,
+   936→        slot
+   937→      );
+   938→      this.graph.onNodeConnectionChange(
+   939→        LiteGraph.OUTPUT,
+   940→        this,
+   941→        slot,
+   942→        target_node,
+   943→        target_slot
+   944→      );
+   945→    }
+   946→
+   947→    this.setDirtyCanvas(false, true);
+   948→    this.graph.afterChange();
+   949→    this.graph.connectionChange(this, link_info);
+   950→
+   951→    return link_info;
+   952→  }
+   953→
+   954→  /**
+   955→   * Connect by type - find a compatible input slot on the target node.
+   956→   * Restored original options + fallback paths.
+   957→   */
+   958→  connectByType(slot, target_node, target_slotType, optsIn) {
+   959→    const opts = Object.assign(
+   960→      {
+   961→        createEventInCase: true,
+   962→        firstFreeIfOutputGeneralInCase: true,
+   963→        generalTypeInCase: true,
+   964→      },
+   965→      optsIn || {}
+   966→    );
+   967→
+   968→    if (target_node && target_node.constructor === Number) {
+   969→      target_node = this.graph.getNodeById(target_node);
+   970→    }
+   971→
+   972→    let target_slot = target_node.findInputSlotByType(target_slotType, false, true);
+   973→    if (target_slot >= 0 && target_slot !== null) {
+   974→      return this.connect(slot, target_node, target_slot);
+   975→    }
+   976→
+   977→    if (opts.createEventInCase && target_slotType === LiteGraph.EVENT) {
+   978→      return this.connect(slot, target_node, -1);
+   979→    }
+   980→
+   981→    if (opts.generalTypeInCase) {
+   982→      const generalSlot = target_node.findInputSlotByType(0, false, true, true);
+   983→      if (generalSlot >= 0) {
+   984→        return this.connect(slot, target_node, generalSlot);
+   985→      }
+   986→    }
+   987→
+   988→    if (
+   989→      opts.firstFreeIfOutputGeneralInCase &&
+   990→      (target_slotType === 0 || target_slotType === "*" || target_slotType === "")
+   991→    ) {
+   992→      const freeSlot = target_node.findInputSlotFree({
+   993→        typesNotAccepted: [LiteGraph.EVENT],
+   994→      });
+   995→      if (freeSlot >= 0) {
+   996→        return this.connect(slot, target_node, freeSlot);
+   997→      }
+   998→    }
+   999→
+  1000→    console.debug("no way to connect type: ", target_slotType, " to targetNODE ", target_node);
+  1001→    return null;
+  1002→  }
+  1003→
+  1004→  /**
+  1005→   * Connect by type (output side) - find a compatible output slot on the source node.
+  1006→   */
+  1007→  connectByTypeOutput(slot, source_node, source_slotType, optsIn) {
+  1008→    const opts = Object.assign(
+  1009→      {
+  1010→        createEventInCase: true,
+  1011→        firstFreeIfInputGeneralInCase: true,
+  1012→        generalTypeInCase: true,
+  1013→      },
+  1014→      optsIn || {}
+  1015→    );
+  1016→
+  1017→    if (source_node && source_node.constructor === Number) {
+  1018→      source_node = this.graph.getNodeById(source_node);
+  1019→    }
+  1020→
+  1021→    let source_slot = source_node.findOutputSlotByType(source_slotType, false, true);
+  1022→    if (source_slot >= 0 && source_slot !== null) {
+  1023→      return source_node.connect(source_slot, this, slot);
+  1024→    }
+  1025→
+  1026→    if (opts.generalTypeInCase) {
+  1027→      const generalSlot = source_node.findOutputSlotByType(0, false, true, true);
+  1028→      if (generalSlot >= 0) {
+  1029→        return source_node.connect(generalSlot, this, slot);
+  1030→      }
+  1031→    }
+  1032→
+  1033→    if (opts.createEventInCase && source_slotType === LiteGraph.EVENT) {
+  1034→      if (LiteGraph.do_add_triggers_slots) {
+  1035→        const execSlot = source_node.addOnExecutedOutput();
+  1036→        return source_node.connect(execSlot, this, slot);
+  1037→      }
+  1038→    }
+  1039→
+  1040→    if (
+  1041→      opts.firstFreeIfInputGeneralInCase &&
+  1042→      (source_slotType === 0 || source_slotType === "*" || source_slotType === "")
+  1043→    ) {
+  1044→      const freeSlot = source_node.findOutputSlotFree({
+  1045→        typesNotAccepted: [LiteGraph.EVENT],
+  1046→      });
+  1047→      if (freeSlot >= 0) {
+  1048→        return source_node.connect(freeSlot, this, slot);
+  1049→      }
+  1050→    }
+  1051→
+  1052→    console.debug("no way to connect byOUT type: ", source_slotType, " to sourceNODE ", source_node);
+  1053→    return null;
+  1054→  }
+  1055→
+  1056→  /**
+  1057→   * Disconnect one output slot, optionally only for a specific target node.
+  1058→   * Restored original full event-firing flow.
+  1059→   */
+  1060→  disconnectOutput(slot, target_node) {
+  1061→    if (slot && slot.constructor === String) {
+  1062→      slot = this.findOutputSlot(slot);
+  1063→      if (slot == -1) {
+  1064→        if (LiteGraph.debug) console.log("Connect: Error, no slot of name " + slot);
+  1065→        return false;
+  1066→      }
+  1067→    } else if (!this.outputs || slot >= this.outputs.length) {
+  1068→      if (LiteGraph.debug) console.log("Connect: Error, slot number not found");
+  1069→      return false;
+  1070→    }
+  1071→
+  1072→    const output = this.outputs[slot];
+  1073→    if (!output || !output.links || output.links.length === 0) {
+  1074→      return false;
+  1075→    }
+  1076→
+  1077→    // Disconnect only the link(s) targeting a specific node
+  1078→    if (target_node) {
+  1079→      if (target_node.constructor === Number) {
+  1080→        target_node = this.graph.getNodeById(target_node);
+  1081→      }
+  1082→      if (!target_node) {
+  1083→        throw new Error("Target Node not found");
+  1084→      }
+  1085→
+  1086→      for (let i = 0, l = output.links.length; i < l; i++) {
+  1087→        const link_id = output.links[i];
+  1088→        const link_info = this.graph.links[link_id];
+  1089→        if (!link_info) continue;
+  1090→
+  1091→        if (link_info.target_id === target_node.id) {
+  1092→          output.links.splice(i, 1);
+  1093→          const input = target_node.inputs[link_info.target_slot];
+  1094→          input.link = null;
+  1095→          delete this.graph.links[link_id];
+  1096→          if (this.graph) this.graph._version++;
+  1097→          if (target_node.onConnectionsChange) {
+  1098→            target_node.onConnectionsChange(
+  1099→              LiteGraph.INPUT,
+  1100→              link_info.target_slot,
+  1101→              false,
+  1102→              link_info,
+  1103→              input
+  1104→            );
+  1105→          }
+  1106→          if (this.onConnectionsChange) {
+  1107→            this.onConnectionsChange(LiteGraph.OUTPUT, slot, false, link_info, output);
+  1108→          }
+  1109→          if (this.graph && this.graph.onNodeConnectionChange) {
+  1110→            this.graph.onNodeConnectionChange(LiteGraph.OUTPUT, this, slot);
+  1111→            this.graph.onNodeConnectionChange(
+  1112→              LiteGraph.INPUT,
+  1113→              target_node,
+  1114→              link_info.target_slot
+  1115→            );
+  1116→          }
+  1117→          break;
+  1118→        }
+  1119→      }
+  1120→    } else {
+  1121→      // Disconnect ALL links from this output
+  1122→      for (let i = 0, l = output.links.length; i < l; i++) {
+  1123→        const link_id = output.links[i];
+  1124→        const link_info = this.graph.links[link_id];
+  1125→        if (!link_info) continue;
+  1126→
+  1127→        const target = this.graph.getNodeById(link_info.target_id);
+  1128→        let input = null;
+  1129→        if (this.graph) this.graph._version++;
+  1130→        if (target) {
+  1131→          input = target.inputs[link_info.target_slot];
+  1132→          input.link = null;
+  1133→          if (target.onConnectionsChange) {
+  1134→            target.onConnectionsChange(
+  1135→              LiteGraph.INPUT,
+  1136→              link_info.target_slot,
+  1137→              false,
+  1138→              link_info,
+  1139→              input
+  1140→            );
+  1141→          }
+  1142→          if (this.graph && this.graph.onNodeConnectionChange) {
+  1143→            this.graph.onNodeConnectionChange(
+  1144→              LiteGraph.INPUT,
+  1145→              target,
+  1146→              link_info.target_slot
+  1147→            );
+  1148→          }
+  1149→        }
+  1150→        delete this.graph.links[link_id];
+  1151→        if (this.onConnectionsChange) {
+  1152→          this.onConnectionsChange(LiteGraph.OUTPUT, slot, false, link_info, output);
+  1153→        }
+  1154→        if (this.graph && this.graph.onNodeConnectionChange) {
+  1155→          this.graph.onNodeConnectionChange(LiteGraph.OUTPUT, this, slot);
+  1156→          this.graph.onNodeConnectionChange(
+  1157→            LiteGraph.INPUT,
+  1158→            target,
+  1159→            link_info.target_slot
+  1160→          );
+  1161→        }
+  1162→      }
+  1163→      output.links = null;
+  1164→    }
+  1165→
+  1166→    this.setDirtyCanvas(false, true);
+  1167→    this.graph.connectionChange(this);
+  1168→    return true;
+  1169→  }
+  1170→
+  1171→  /**
+  1172→   * Disconnect an input slot.
+  1173→   * Restored original full event-firing flow.
+  1174→   */
+  1175→  disconnectInput(slot) {
+  1176→    if (slot && slot.constructor === String) {
+  1177→      slot = this.findInputSlot(slot);
+  1178→      if (slot == -1) {
+  1179→        if (LiteGraph.debug) console.log("Connect: Error, no slot of name " + slot);
+  1180→        return false;
+  1181→      }
+  1182→    } else if (!this.inputs || slot >= this.inputs.length) {
+  1183→      if (LiteGraph.debug) console.log("Connect: Error, slot number not found");
+  1184→      return false;
+  1185→    }
+  1186→
+  1187→    const input = this.inputs[slot];
+  1188→    if (!input) return false;
+  1189→
+  1190→    const link_id = this.inputs[slot].link;
+  1191→    if (link_id != null) {
+  1192→      this.inputs[slot].link = null;
+  1193→
+  1194→      const link_info = this.graph.links[link_id];
+  1195→      if (link_info) {
+  1196→        const target_node = this.graph.getNodeById(link_info.origin_id);
+  1197→        if (!target_node) return false;
+  1198→
+  1199→        const output = target_node.outputs[link_info.origin_slot];
+  1200→        if (!output || !output.links || output.links.length === 0) return false;
+  1201→
+  1202→        // Find & remove this link from the output's links array
+  1203→        // Fix: original used `for (i = 0, l = output.links.length; ...)` without
+  1204→        // declaring `l` — in strict mode / minified builds this throws
+  1205→        // "l is not defined". Declare both variables properly.
+  1206→        let i;
+  1207→        const linkCount = output.links.length;
+  1208→        for (i = 0; i < linkCount; i++) {
+  1209→          if (output.links[i] === link_id) {
+  1210→            output.links.splice(i, 1);
+  1211→            break;
+  1212→          }
+  1213→        }
+  1214→
+  1215→        delete this.graph.links[link_id];
+  1216→        if (this.graph) this.graph._version++;
+  1217→
+  1218→        if (this.onConnectionsChange) {
+  1219→          this.onConnectionsChange(LiteGraph.INPUT, slot, false, link_info, input);
+  1220→        }
+  1221→        if (target_node.onConnectionsChange) {
+  1222→          target_node.onConnectionsChange(
+  1223→            LiteGraph.OUTPUT,
+  1224→            i,
+  1225→            false,
+  1226→            link_info,
+  1227→            output
+  1228→          );
+  1229→        }
+  1230→        if (this.graph && this.graph.onNodeConnectionChange) {
+  1231→          this.graph.onNodeConnectionChange(LiteGraph.OUTPUT, target_node, i);
+  1232→          this.graph.onNodeConnectionChange(LiteGraph.INPUT, this, slot);
+  1233→        }
+  1234→      }
+  1235→    }
+  1236→
+  1237→    this.setDirtyCanvas(false, true);
+  1238→    if (this.graph) this.graph.connectionChange(this);
+  1239→    return true;
+  1240→  }
+  1241→
+  1242→  // ===================== CONNECTION POSITION =====================
+  1243→
+  1244→  /**
+  1245→   * Returns the center of a connection point in canvas coords.
+  1246→   * Restored original full algorithm: collapsed handling (incl. horizontal
+  1247→   * layout), -1 special case, hard-coded slot.pos overrides, horizontal
+  1248→   * distributed slots, and slot_start_y offset.
+  1249→   */
+  1250→  getConnectionPos(is_input, slot_number, out) {
+  1251→    out = out || new Float32Array(2);
+  1252→    let num_slots = 0;
+  1253→    if (is_input && this.inputs) num_slots = this.inputs.length;
+  1254→    if (!is_input && this.outputs) num_slots = this.outputs.length;
+  1255→
+  1256→    const offset = LiteGraph.NODE_SLOT_HEIGHT * 0.5;
+  1257→
+  1258→    if (this.flags && this.flags.collapsed) {
+  1259→      const w = this._collapsed_width || LiteGraph.NODE_COLLAPSED_WIDTH;
+  1260→      if (this.horizontal) {
+  1261→        out[0] = this.pos[0] + w * 0.5;
+  1262→        if (is_input) {
+  1263→          out[1] = this.pos[1] - LiteGraph.NODE_TITLE_HEIGHT;
+  1264→        } else {
+  1265→          out[1] = this.pos[1];
+  1266→        }
+  1267→      } else {
+  1268→        if (is_input) {
+  1269→          out[0] = this.pos[0];
+  1270→        } else {
+  1271→          out[0] = this.pos[0] + w;
+  1272→        }
+  1273→        out[1] = this.pos[1] - LiteGraph.NODE_TITLE_HEIGHT * 0.5;
+  1274→      }
+  1275→      return out;
+  1276→    }
+  1277→
+  1278→    // Weird feature that never got finished — special -1 slot
+  1279→    if (is_input && slot_number === -1) {
+  1280→      out[0] = this.pos[0] + LiteGraph.NODE_TITLE_HEIGHT * 0.5;
+  1281→      out[1] = this.pos[1] + LiteGraph.NODE_TITLE_HEIGHT * 0.5;
+  1282→      return out;
+  1283→    }
+  1284→
+  1285→    // Hard-coded per-slot pos override
+  1286→    if (
+  1287→      is_input &&
+  1288→      num_slots > slot_number &&
+  1289→      this.inputs[slot_number] &&
+  1290→      this.inputs[slot_number].pos
+  1291→    ) {
+  1292→      out[0] = this.pos[0] + this.inputs[slot_number].pos[0];
+  1293→      out[1] = this.pos[1] + this.inputs[slot_number].pos[1];
+  1294→      return out;
+  1295→    } else if (
+  1296→      !is_input &&
+  1297→      num_slots > slot_number &&
+  1298→      this.outputs[slot_number] &&
+  1299→      this.outputs[slot_number].pos
+  1300→    ) {
+  1301→      out[0] = this.pos[0] + this.outputs[slot_number].pos[0];
+  1302→      out[1] = this.pos[1] + this.outputs[slot_number].pos[1];
+  1303→      return out;
+  1304→    }
+  1305→
+  1306→    // Horizontal distributed slots
+  1307→    if (this.horizontal) {
+  1308→      out[0] =
+  1309→        this.pos[0] + (slot_number + 0.5) * (this.size[0] / num_slots);
+  1310→      if (is_input) {
+  1311→        out[1] = this.pos[1] - LiteGraph.NODE_TITLE_HEIGHT;
+  1312→      } else {
+  1313→        out[1] = this.pos[1] + this.size[1];
+  1314→      }
+  1315→      return out;
+  1316→    }
+  1317→
+  1318→    // Default vertical slots
+  1319→    if (is_input) {
+  1320→      out[0] = this.pos[0] + offset;
+  1321→    } else {
+  1322→      out[0] = this.pos[0] + this.size[0] + 1 - offset;
+  1323→    }
+  1324→    out[1] =
+  1325→      this.pos[1] +
+  1326→      (slot_number + 0.7) * LiteGraph.NODE_SLOT_HEIGHT +
+  1327→      (this.constructor.slot_start_y || 0);
+  1328→    return out;
+  1329→  }
+  1330→
+  1331→  // ===================== SLOT SEARCH =====================
+  1332→
+  1333→  findInputSlot(name, returnObj) {
+  1334→    if (!this.inputs) return -1;
+  1335→    for (let i = 0, l = this.inputs.length; i < l; ++i) {
+  1336→      if (name === this.inputs[i].name) {
+  1337→        return !returnObj ? i : this.inputs[i];
+  1338→      }
+  1339→    }
+  1340→    return -1;
+  1341→  }
+  1342→
+  1343→  findOutputSlot(name, returnObj) {
+  1344→    returnObj = returnObj || false;
+  1345→    if (!this.outputs) return -1;
+  1346→    for (let i = 0, l = this.outputs.length; i < l; ++i) {
+  1347→      if (name === this.outputs[i].name) {
+  1348→        return !returnObj ? i : this.outputs[i];
+  1349→      }
+  1350→    }
+  1351→    return -1;
+  1352→  }
+  1353→
+  1354→  /**
+  1355→   * Returns the first free input slot.
+  1356→   * Restored original options: { returnObj, typesNotAccepted }.
+  1357→   */
+  1358→  findInputSlotFree(optsIn) {
+  1359→    const opts = Object.assign(
+  1360→      { returnObj: false, typesNotAccepted: [] },
+  1361→      optsIn || {}
+  1362→    );
+  1363→    if (!this.inputs) return -1;
+  1364→    for (let i = 0, l = this.inputs.length; i < l; ++i) {
+  1365→      if (this.inputs[i].link && this.inputs[i].link != null) continue;
+  1366→      if (
+  1367→        opts.typesNotAccepted &&
+  1368→        opts.typesNotAccepted.includes &&
+  1369→        opts.typesNotAccepted.includes(this.inputs[i].type)
+  1370→      ) {
+  1371→        continue;
+  1372→      }
+  1373→      return !opts.returnObj ? i : this.inputs[i];
+  1374→    }
+  1375→    return -1;
+  1376→  }
+  1377→
+  1378→  findOutputSlotFree(optsIn) {
+  1379→    const opts = Object.assign(
+  1380→      { returnObj: false, typesNotAccepted: [] },
+  1381→      optsIn || {}
+  1382→    );
+  1383→    if (!this.outputs) return -1;
+  1384→    for (let i = 0, l = this.outputs.length; i < l; ++i) {
+  1385→      if (this.outputs[i].links && this.outputs[i].links != null) continue;
+  1386→      if (
+  1387→        opts.typesNotAccepted &&
+  1388→        opts.typesNotAccepted.includes &&
+  1389→        opts.typesNotAccepted.includes(this.outputs[i].type)
+  1390→      ) {
+  1391→        continue;
+  1392→      }
+  1393→      return !opts.returnObj ? i : this.outputs[i];
+  1394→    }
+  1395→    return -1;
+  1396→  }
+  1397→
+  1398→  findInputSlotByType(type, returnObj, preferFreeSlot, doNotUseOccupied) {
+  1399→    return this.findSlotByType(true, type, returnObj, preferFreeSlot, doNotUseOccupied);
+  1400→  }
+  1401→
+  1402→  findOutputSlotByType(type, returnObj, preferFreeSlot, doNotUseOccupied) {
+  1403→    return this.findSlotByType(false, type, returnObj, preferFreeSlot, doNotUseOccupied);
+  1404→  }
+  1405→
+  1406→  /**
+  1407→   * Returns the output (or input) slot with a given type.
+  1408→   * Restored original rich matching: comma-split, _event_/EVENT and star/0
+  1409→   * normalization, preferFreeSlot first pass, doNotUseOccupied fallback.
+  1410→   * First argument is boolean `input` (true=inputs, false=outputs).
+  1411→   */
+  1412→  findSlotByType(input, type, returnObj, preferFreeSlot, doNotUseOccupied) {
+  1413→    input = input || false;
+  1414→    returnObj = returnObj || false;
+  1415→    preferFreeSlot = preferFreeSlot || false;
+  1416→    doNotUseOccupied = doNotUseOccupied || false;
+  1417→    const aSlots = input ? this.inputs : this.outputs;
+  1418→    if (!aSlots) return -1;
+  1419→
+  1420→    // Empty string / "*" → 0 (wildcard)
+  1421→    if (type === "" || type === "*") type = 0;
+  1422→
+  1423→    // First pass: prefer free slots if requested
+  1424→    for (let i = 0, l = aSlots.length; i < l; ++i) {
+  1425→      const aSource = (type + "").toLowerCase().split(",");
+  1426→      let aDest =
+  1427→        aSlots[i].type === "0" || aSlots[i].type === "*" ? "0" : aSlots[i].type;
+  1428→      aDest = (aDest + "").toLowerCase().split(",");
+  1429→      for (let sI = 0; sI < aSource.length; sI++) {
+  1430→        for (let dI = 0; dI < aDest.length; dI++) {
+  1431→          if (aSource[sI] === "_event_") aSource[sI] = LiteGraph.EVENT;
+  1432→          if (aDest[sI] === "_event_") aDest[sI] = LiteGraph.EVENT;
+  1433→          if (aSource[sI] === "*") aSource[sI] = 0;
+  1434→          if (aDest[sI] === "*") aDest[sI] = 0;
+  1435→          if (aSource[sI] === aDest[dI]) {
+  1436→            if (preferFreeSlot && aSlots[i].links && aSlots[i].links !== null) continue;
+  1437→            return !returnObj ? i : aSlots[i];
+  1438→          }
+  1439→        }
+  1440→      }
+  1441→    }
+  1442→
+  1443→    // Second pass (only if preferFreeSlot was requested and we're allowed to use occupied)
+  1444→    if (preferFreeSlot && !doNotUseOccupied) {
+  1445→      for (let i = 0, l = aSlots.length; i < l; ++i) {
+  1446→        const aSource = (type + "").toLowerCase().split(",");
+  1447→        let aDest =
+  1448→          aSlots[i].type === "0" || aSlots[i].type === "*" ? "0" : aSlots[i].type;
+  1449→        aDest = (aDest + "").toLowerCase().split(",");
+  1450→        for (let sI = 0; sI < aSource.length; sI++) {
+  1451→          for (let dI = 0; dI < aDest.length; dI++) {
+  1452→            if (aSource[sI] === "*") aSource[sI] = 0;
+  1453→            if (aDest[sI] === "*") aDest[sI] = 0;
+  1454→            if (aSource[sI] === aDest[dI]) {
+  1455→              return !returnObj ? i : aSlots[i];
+  1456→            }
+  1457→          }
+  1458→        }
+  1459→      }
+  1460→    }
+  1461→    return -1;
+  1462→  }
+  1463→
+  1464→  // ===================== SIZE & LAYOUT =====================
+  1465→
+  1466→  setSize(size) {
+  1467→    this.size = size;
+  1468→    if (this.onResize) this.onResize(size);
+  1469→  }
+  1470→
+  1471→  /**
+  1472→   * Computes the minimum size of a node according to its slots & widgets.
+  1473→   * Restored original algorithm: constructor.size shortcut, font-based text
+  1474→   * width, widgets_up/widgets_start_y, slot_start_y, min_height, +6 margin.
+  1475→   */
+  1476→  computeSize(out) {
+  1477→    if (this.constructor.size) {
+  1478→      return this.constructor.size.concat();
+  1479→    }
+  1480→
+  1481→    const rows = Math.max(
+  1482→      this.inputs ? this.inputs.length : 1,
+  1483→      this.outputs ? this.outputs.length : 1
+  1484→    );
+  1485→    const size = out || new Float32Array([0, 0]);
+  1486→    const font_size = LiteGraph.NODE_TEXT_SIZE;
+  1487→
+  1488→    const compute_text_size = (text) => {
+  1489→      if (!text) return 0;
+  1490→      return font_size * text.length * 0.6;
+  1491→    };
+  1492→
+  1493→    const title_width = compute_text_size(this.title);
+  1494→    let input_width = 0;
+  1495→    let output_width = 0;
+  1496→
+  1497→    if (this.inputs) {
+  1498→      for (let i = 0, l = this.inputs.length; i < l; ++i) {
+  1499→        const input = this.inputs[i];
+  1500→        const text = input.label || input.name || "";
+  1501→        const text_width = compute_text_size(text);
+  1502→        if (input_width < text_width) input_width = text_width;
+  1503→      }
+  1504→    }
+  1505→    if (this.outputs) {
+  1506→      for (let i = 0, l = this.outputs.length; i < l; ++i) {
+  1507→        const output = this.outputs[i];
+  1508→        const text = output.label || output.name || "";
+  1509→        const text_width = compute_text_size(text);
+  1510→        if (output_width < text_width) output_width = text_width;
+  1511→      }
+  1512→    }
+  1513→
+  1514→    size[0] = Math.max(input_width + output_width + 10, title_width);
+  1515→    size[0] = Math.max(size[0], LiteGraph.NODE_WIDTH);
+  1516→
+  1517→    size[1] =
+  1518→      (this.constructor.slot_start_y || 0) +
+  1519→      rows * LiteGraph.NODE_SLOT_HEIGHT;
+  1520→
+  1521→    if (this.constructor.min_height && size[1] < this.constructor.min_height) {
+  1522→      size[1] = this.constructor.min_height;
+  1523→    }
+  1524→
+  1525→    size[1] += 6; // margin
+  1526→    return size;
+  1527→  }
+  1528→
+  1529→  getBounding(out, compute_outer) {
+  1530→    out = out || new Float32Array(4);
+  1531→    const nodePos = this.pos;
+  1532→    const isCollapsed = this.flags && this.flags.collapsed;
+  1533→    const nodeSize = this.size;
+  1534→
+  1535→    let left_offset = 0;
+  1536→    let right_offset = 1;
+  1537→    let top_offset = 0;
+  1538→    let bottom_offset = 0;
+  1539→
+  1540→    if (compute_outer) {
+  1541→      left_offset = 4;
+  1542→      right_offset = 6 + left_offset;
+  1543→      top_offset = 4;
+  1544→      bottom_offset = 5 + top_offset;
+  1545→    }
+  1546→
+  1547→    out[0] = nodePos[0] - left_offset;
+  1548→    out[1] = nodePos[1] - LiteGraph.NODE_TITLE_HEIGHT - top_offset;
+  1549→    out[2] = isCollapsed
+  1550→      ? (this._collapsed_width || LiteGraph.NODE_COLLAPSED_WIDTH) + right_offset
+  1551→      : nodeSize[0] + right_offset;
+  1552→    out[3] = isCollapsed
+  1553→      ? LiteGraph.NODE_TITLE_HEIGHT + bottom_offset
+  1554→      : nodeSize[1] + LiteGraph.NODE_TITLE_HEIGHT + bottom_offset;
+  1555→
+  1556→    if (this.onBounding) {
+  1557→      this.onBounding(out);
+  1558→    }
+  1559→    return out;
+  1560→  }
+  1561→
+  1562→  /**
+  1563→   * Returns true if the point (x, y) is inside this node.
+  1564→   * Restored original logic: skip_title flag, graph.isLive() check,
+  1565→   * collapsed-node branch (using isInsideRectangle + _collapsed_width),
+  1566→   * 4px x-margin buffer.
+  1567→   */
+  1568→  isPointInside(x, y, margin, skip_title) {
+  1569→    margin = margin || 0;
+  1570→    let margin_top =
+  1571→      this.graph && this.graph.isLive() ? 0 : LiteGraph.NODE_TITLE_HEIGHT;
+  1572→    if (skip_title) margin_top = 0;
+  1573→
+  1574→    if (this.flags && this.flags.collapsed) {
+  1575→      if (
+  1576→        isInsideRectangle(
+  1577→          x,
+  1578→          y,
+  1579→          this.pos[0] - margin,
+  1580→          this.pos[1] - LiteGraph.NODE_TITLE_HEIGHT - margin,
+  1581→          (this._collapsed_width || LiteGraph.NODE_COLLAPSED_WIDTH) +
+  1582→            2 * margin,
+  1583→          LiteGraph.NODE_TITLE_HEIGHT + 2 * margin
+  1584→        )
+  1585→      ) {
+  1586→        return true;
+  1587→      }
+  1588→    } else if (
+  1589→      this.pos[0] - 4 - margin < x &&
+  1590→      this.pos[0] + this.size[0] + 4 + margin > x &&
+  1591→      this.pos[1] - margin_top - margin < y &&
+  1592→      this.pos[1] + this.size[1] + margin > y
+  1593→    ) {
+  1594→      return true;
+  1595→    }
+  1596→    return false;
+  1597→  }
+  1598→
+  1599→  /**
+  1600→   * Checks if a point is inside a node slot, returns info about which slot.
+  1601→   * Restored original hit-test (20x10 rectangle anchored at top-left of
+  1602→   * the slot position) and the `link_pos` key name (callers may destructure
+  1603→   * `link_pos`, so the camelCase rename was breaking).
+  1604→   */
+  1605→  getSlotInPosition(x, y) {
+  1606→    const link_pos = new Float32Array(2);
+  1607→    if (this.inputs) {
+  1608→      for (let i = 0, l = this.inputs.length; i < l; ++i) {
+  1609→        const input = this.inputs[i];
+  1610→        this.getConnectionPos(true, i, link_pos);
+  1611→        if (isInsideRectangle(x, y, link_pos[0] - 10, link_pos[1] - 5, 20, 10)) {
+  1612→          return { input: input, slot: i, link_pos: link_pos };
+  1613→        }
+  1614→      }
+  1615→    }
+  1616→    if (this.outputs) {
+  1617→      for (let i = 0, l = this.outputs.length; i < l; ++i) {
+  1618→        const output = this.outputs[i];
+  1619→        this.getConnectionPos(false, i, link_pos);
+  1620→        if (isInsideRectangle(x, y, link_pos[0] - 10, link_pos[1] - 5, 20, 10)) {
+  1621→          return { output: output, slot: i, link_pos: link_pos };
+  1622→        }
+  1623→      }
+  1624→    }
+  1625→    return null;
+  1626→  }
+  1627→
+  1628→  alignToGrid() {
+  1629→    this.pos[0] = Math.round(this.pos[0] / LiteGraph.CANVAS_GRID_SIZE) * LiteGraph.CANVAS_GRID_SIZE;
+  1630→    this.pos[1] = Math.round(this.pos[1] / LiteGraph.CANVAS_GRID_SIZE) * LiteGraph.CANVAS_GRID_SIZE;
+  1631→  }
+  1632→
+  1633→  // ===================== EVENT/TRIGGER =====================
+  1634→
+  1635→  addOnTriggerInput() {
+  1636→    const trigS = this.findInputSlot("onTrigger");
+  1637→    if (trigS === -1) {
+  1638→      this.addInput("onTrigger", LiteGraph.EVENT, {
+  1639→        optional: true,
+  1640→        nameLocked: true,
+  1641→      });
+  1642→      return this.findInputSlot("onTrigger");
+  1643→    }
+  1644→    return trigS;
+  1645→  }
+  1646→
+  1647→  addOnExecutedOutput() {
+  1648→    const trigS = this.findOutputSlot("onExecuted");
+  1649→    if (trigS === -1) {
+  1650→      // Original uses LiteGraph.ACTION (not EVENT) for the onExecuted output.
+  1651→      this.addOutput("onExecuted", LiteGraph.ACTION, {
+  1652→        optional: true,
+  1653→        nameLocked: true,
+  1654→      });
+  1655→      return this.findOutputSlot("onExecuted");
+  1656→    }
+  1657→    return trigS;
+  1658→  }
+  1659→
+  1660→  onAfterExecuteNode(param, options) {
+  1661→    const trigS = this.findOutputSlot("onExecuted");
+  1662→    if (trigS !== -1) {
+  1663→      this.triggerSlot(trigS, param, null, options);
+  1664→    }
+  1665→  }
+  1666→
+  1667→  changeMode(modeTo) {
+  1668→    switch (modeTo) {
+  1669→      case LiteGraph.ON_EVENT:
+  1670→        break;
+  1671→      case LiteGraph.ON_TRIGGER:
+  1672→        this.addOnTriggerInput();
+  1673→        this.addOnExecutedOutput();
+  1674→        break;
+  1675→      case LiteGraph.NEVER:
+  1676→        break;
+  1677→      case LiteGraph.ALWAYS:
+  1678→        break;
+  1679→      case LiteGraph.ON_REQUEST:
+  1680→        break;
+  1681→      default:
+  1682→        return false;
+  1683→    }
+  1684→    this.mode = modeTo;
+  1685→    return true;
+  1686→  }
+  1687→
+  1688→  /**
+  1689→   * Triggers the node code execution. Restored original behavior:
+  1690→   *   - generates unique action_call id
+  1691→   *   - tracks graph.nodes_executing / nodes_executedAction
+  1692→   *   - sets exec_version = graph.iteration
+  1693→   *   - sets execute_triggered = 2 (frame counter)
+  1694→   *   - calls onAfterExecuteNode(param, options)
+  1695→   */
+  1696→  doExecute(param, options) {
+  1697→    options = options || {};
+  1698→    if (this.onExecute) {
+  1699→      if (!options.action_call)
+  1700→        options.action_call =
+  1701→          this.id + "_exec_" + Math.floor(Math.random() * 9999);
+  1702→
+  1703→      if (this.graph) this.graph.nodes_executing[this.id] = true;
+  1704→
+  1705→      if (LiteGraph.catch_exceptions) {
+  1706→        try {
+  1707→          this.onExecute(param, options);
+  1708→        } catch (err) {
+  1709→          console.error(`Error executing node "${this.title}":`, err);
+  1710→          if (LiteGraph.throw_errors) throw err;
+  1711→        }
+  1712→      } else {
+  1713→        this.onExecute(param, options);
+  1714→      }
+  1715→
+  1716→      if (this.graph) this.graph.nodes_executing[this.id] = false;
+  1717→
+  1718→      this.exec_version = this.graph ? this.graph.iteration : 0;
+  1719→      if (options && options.action_call) {
+  1720→        this.action_call = options.action_call;
+  1721→        if (this.graph) this.graph.nodes_executedAction[this.id] = options.action_call;
+  1722→      }
+  1723→    }
+  1724→    this.execute_triggered = 2;
+  1725→    if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
+  1726→  }
+  1727→
+  1728→  executePendingActions() {
+  1729→    if (!this._waiting_actions || !this._waiting_actions.length) return;
+  1730→    for (let i = 0; i < this._waiting_actions.length; ++i) {
+  1731→      const p = this._waiting_actions[i];
+  1732→      // Original format: [name, param, options, action_slot]
+  1733→      this.onAction(p[0], p[1], p[2], p[3]);
+  1734→    }
+  1735→    this._waiting_actions.length = 0;
+  1736→  }
+  1737→
+  1738→  /**
+  1739→   * Immediate action executor — restored original semantics.
+  1740→   * (The deferred behavior lives in triggerSlot, NOT here.)
+  1741→   * Generates action_call id, tracks graph.nodes_actioning /
+  1742→   * nodes_executedAction, sets action_triggered = 2, calls onAfterExecuteNode.
+  1743→   */
+  1744→  actionDo(action, param, options, action_slot) {
+  1745→    options = options || {};
+  1746→    if (this.onAction) {
+  1747→      if (!options.action_call)
+  1748→        options.action_call =
+  1749→          this.id + "_" + (action ? action : "action") + "_" + Math.floor(Math.random() * 9999);
+  1750→
+  1751→      if (this.graph) this.graph.nodes_actioning[this.id] = action ? action : "actioning";
+  1752→
+  1753→      this.onAction(action, param, options, action_slot);
+  1754→
+  1755→      if (this.graph) this.graph.nodes_actioning[this.id] = false;
+  1756→
+  1757→      if (options && options.action_call) {
+  1758→        this.action_call = options.action_call;
+  1759→        if (this.graph) this.graph.nodes_executedAction[this.id] = options.action_call;
+  1760→      }
+  1761→    }
+  1762→    this.action_triggered = 2;
+  1763→    if (this.onAfterExecuteNode) this.onAfterExecuteNode(param, options);
+  1764→  }
+  1765→
+  1766→  /**
+  1767→   * Triggers an event in this node — fires any output with a matching name
+  1768→   * (or all EVENT outputs when action is falsy).
+  1769→   */
+  1770→  trigger(action, param, options) {
+  1771→    if (!this.outputs || !this.outputs.length) return;
+  1772→    if (this.graph) this.graph._last_trigger_time = LiteGraph.getTime();
+  1773→    for (let i = 0; i < this.outputs.length; ++i) {
+  1774→      const output = this.outputs[i];
+  1775→      if (!output || output.type !== LiteGraph.EVENT) continue;
+  1776→      if (action && output.name !== action) continue;
+  1777→      this.triggerSlot(i, param, null, options);
+  1778→    }
+  1779→  }
+  1780→
+  1781→  /**
+  1782→   * Triggers a slot event: cycles output links and fires either doExecute
+  1783→   * (for ON_TRIGGER nodes) or actionDo (immediate) / deferred queue push
+  1784→   * (based on LiteGraph.use_deferred_actions).
+  1785→   * Restored original parameters: link_id filter, options, action_call ids,
+  1786→   * _last_time marking on links.
+  1787→   */
+  1788→  triggerSlot(slot, param, link_id, options) {
+  1789→    options = options || {};
+  1790→    if (!this.outputs) return;
+  1791→    if (slot == null) {
+  1792→      console.error("slot must be a number");
+  1793→      return;
+  1794→    }
+  1795→    if (slot.constructor !== Number)
+  1796→      console.warn("slot must be a number, use node.trigger('name') if you want to use a string");
+  1797→
+  1798→    const output = this.outputs[slot];
+  1799→    if (!output) return;
+  1800→    const links = output.links;
+  1801→    if (!links || !links.length) return;
+  1802→
+  1803→    if (this.graph) this.graph._last_trigger_time = LiteGraph.getTime();
+  1804→
+  1805→    for (let k = 0; k < links.length; ++k) {
+  1806→      const id = links[k];
+  1807→      if (link_id != null && link_id !== id) continue;
+  1808→      const link_info = this.graph.links[links[k]];
+  1809→      if (!link_info) continue;
+  1810→      link_info._last_time = LiteGraph.getTime();
+  1811→
+  1812→      const node = this.graph.getNodeById(link_info.target_id);
+  1813→      if (!node) continue;
+  1814→
+  1815→      const target_connection = node.inputs[link_info.target_slot];
+  1816→
+  1817→      if (node.mode === LiteGraph.ON_TRIGGER) {
+  1818→        if (!options.action_call)
+  1819→          options.action_call =
+  1820→            this.id + "_trigg_" + Math.floor(Math.random() * 9999);
+  1821→        if (node.onExecute) {
+  1822→          node.doExecute(param, options);
+  1823→        }
+  1824→      } else if (node.onAction) {
+  1825→        if (!options.action_call)
+  1826→          options.action_call =
+  1827→            this.id + "_act_" + Math.floor(Math.random() * 9999);
+  1828→        if (LiteGraph.use_deferred_actions && node.onExecute) {
+  1829→          if (!node._waiting_actions) node._waiting_actions = [];
+  1830→          node._waiting_actions.push([
+  1831→            target_connection.name,
+  1832→            param,
+  1833→            options,
+  1834→            link_info.target_slot,
+  1835→          ]);
+  1836→        } else {
+  1837→          node.actionDo(target_connection.name, param, options, link_info.target_slot);
+  1838→        }
+  1839→      }
+  1840→    }
+  1841→  }
+  1842→
+  1843→  /**
+  1844→   * Clears the trigger-slot animation markers on a specific output slot
+  1845→   * (and optionally a specific link within that slot).
+  1846→   * Restored original behavior: clears `link._last_time = 0` (NOT
+  1847→   * `output._triggered`), iterates links with optional link_id filter.
+  1848→   */
+  1849→  clearTriggeredSlot(slot, link_id) {
+  1850→    if (!this.outputs) return;
+  1851→    const output = this.outputs[slot];
+  1852→    if (!output) return;
+  1853→    const links = output.links;
+  1854→    if (!links || !links.length) return;
+  1855→
+  1856→    for (let k = 0; k < links.length; ++k) {
+  1857→      const id = links[k];
+  1858→      if (link_id != null && link_id !== id) continue;
+  1859→      const link_info = this.graph.links[links[k]];
+  1860→      if (!link_info) continue;
+  1861→      link_info._last_time = 0;
+  1862→    }
+  1863→  }
+  1864→
+  1865→  /**
+  1866→   * Convenience: clear triggered markers on ALL output slots.
+  1867→   */
+  1868→  clearTriggeredSlots() {
+  1869→    if (!this.outputs) return;
+  1870→    for (let i = 0; i < this.outputs.length; ++i) {
+  1871→      this.clearTriggeredSlot(i, null);
+  1872→    }
+  1873→  }
+  1874→
+  1875→  /**
+  1876→   * Execute an action on this node (immediate, bypasses deferred queue).
+  1877→   * Similar to actionDo but executes immediately regardless of use_deferred_actions.
+  1878→   */
+  1879→  executeAction(actionName, data) {
+  1880→    if (this.onAction) {
+  1881→      this.onAction(actionName, data);
+  1882→    }
+  1883→  }
+  1884→
+  1885→  // ===================== MISC =====================
+  1886→
+  1887→  /**
+  1888→   * Adds a special connection to this node (used for special graph kinds).
+  1889→   * Restored original signature: (name, type, pos, direction).
+  1890→   * Creates a connection object and pushes it to this.connections.
+  1891→   */
+  1892→  addConnection(name, type, pos, direction) {
+  1893→    const o = {
+  1894→      name: name,
+  1895→      type: type,
+  1896→      pos: pos,
+  1897→      direction: direction,
+  1898→      links: null,
+  1899→    };
+  1900→    if (!this.connections) this.connections = [];
+  1901→    this.connections.push(o);
+  1902→    return o;
+  1903→  }
+  1904→
+  1905→  setDirtyCanvas(fg, bg) {
+  1906→    if (this.graph) {
+  1907→      this.graph.sendActionToCanvas("setDirty", [fg, bg]);
+  1908→    }
+  1909→  }
+  1910→
+  1911→  /**
+  1912→   * Preload an image. Restored original: tracks `img.ready = false` until
+  1913→   * the load event fires, then sets it true and calls setDirtyCanvas(true)
+  1914→   * so the canvas redraws with the loaded image.
+  1915→   */
+  1916→  loadImage(url) {
+  1917→    const img = new Image();
+  1918→    img.src = LiteGraph.node_images_path + url;
+  1919→    img.ready = false;
+  1920→    const self = this;
+  1921→    img.onload = function () {
+  1922→      this.ready = true;
+  1923→      self.setDirtyCanvas(true);
+  1924→    };
+  1925→    return img;
+  1926→  }
+  1927→
+  1928→  /**
+  1929→   * Console output. Restored original: keeps an in-node console buffer
+  1930→   * (capped by LGraphNode.MAX_CONSOLE — note: this constant is never
+  1931→   * defined in the original, so we fall back to 100). Forwards to
+  1932→   * graph.onNodeTrace if the graph is attached.
+  1933→   */
+  1934→  trace(msg) {
+  1935→    if (!this.console) {
+  1936→      this.console = [];
+  1937→    }
+  1938→    this.console.push(msg);
+  1939→    const maxConsole = LGraphNode.MAX_CONSOLE || 100;
+  1940→    if (this.console.length > maxConsole) {
+  1941→      this.console.shift();
+  1942→    }
+  1943→    if (this.graph && this.graph.onNodeTrace) {
+  1944→      this.graph.onNodeTrace(this, msg);
+  1945→    }
+  1946→  }
+  1947→
+  1948→  /**
+  1949→   * Allows a node to get onMouseMove / onMouseUp events even when the mouse
+  1950→   * is out of focus. Restored original direct-manipulation logic (iterates
+  1951→   * graph canvases and sets node_capturing_input directly).
+  1952→   */
+  1953→  captureInput(v) {
+  1954→    if (!this.graph || !this.graph.list_of_graphcanvas) return;
+  1955→    const list = this.graph.list_of_graphcanvas;
+  1956→    for (let i = 0; i < list.length; ++i) {
+  1957→      const c = list[i];
+  1958→      // Releasing somebody else's capture?!
+  1959→      if (!v && c.node_capturing_input !== this) continue;
+  1960→      c.node_capturing_input = v ? this : null;
+  1961→    }
+  1962→  }
+  1963→
+  1964→  collapse(force) {
+  1965→    if (this.graph) this.graph._version++;
+  1966→    if (this.constructor.collapsable === false && !force) return;
+  1967→    if (!this.flags) this.flags = {};
+  1968→    if (!this.flags.collapsed) {
+  1969→      this.flags.collapsed = true;
+  1970→    } else {
+  1971→      this.flags.collapsed = false;
+  1972→    }
+  1973→    this.setDirtyCanvas(true, true);
+  1974→  }
+  1975→
+  1976→  pin(v) {
+  1977→    if (this.graph) this.graph._version++;
+  1978→    if (!this.flags) this.flags = {};
+  1979→    if (v === undefined) {
+  1980→      this.flags.pinned = !this.flags.pinned;
+  1981→    } else {
+  1982→      this.flags.pinned = v;
+  1983→    }
+  1984→  }
+  1985→
+  1986→  localToScreen(x, y, graphcanvas) {
+  1987→    // Original uses graphcanvas.scale / graphcanvas.offset directly. The
+  1988→    // refactored LGraphCanvas keeps a DragAndScale instance at .ds but also
+  1989→    // exposes .scale / .offset proxies — support both to stay compatible
+  1990→    // with callers using either API.
+  1991→    const scale = graphcanvas.ds ? graphcanvas.ds.scale : graphcanvas.scale;
+  1992→    const offset = graphcanvas.ds ? graphcanvas.ds.offset : graphcanvas.offset;
+  1993→    return [
+  1994→      (x + this.pos[0]) * scale + offset[0],
+  1995→      (y + this.pos[1]) * scale + offset[1],
+  1996→    ];
+  1997→  }
+  1998→
+  1999→  /**
+  2000→   * Disconnect all input and output links on this node.
+
+[showing lines 1-2000 of 2030; use offset=2001 with limit to continue reading]

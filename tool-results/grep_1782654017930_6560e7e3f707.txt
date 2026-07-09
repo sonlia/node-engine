@@ -1,0 +1,252 @@
+/home/z/my-project/worklog.md:82:- Read original Part 3 in full: lines 10978-13661 of litegraph.original.js (2684 lines covering 18 prototype methods + several intermixed static helpers like onShowPropertyEditor, getPropertyPrintableValue, onMenuNodeCollapse/Pin/Mode/Colors/Shapes/Remove/ToSubgraph/Clone, and the static node_colors/search_limit properties)
+/home/z/my-project/worklog.md:89:- Confirmed `LGraphCanvas.onMenuNodeToSubgraph` (original L13101-13119, inside Part 3 range) is Missing in refactored
+/home/z/my-project/worklog.md:97:- 0 Missing among the 18 listed methods; 1 Missing static method (onMenuNodeToSubgraph) inside Part 3 range
+/home/z/my-project/worklog.md:100:- Several "Align" / "Resize" / "To Subgraph" menu options removed from refactored getCanvasMenuOptions/getNodeMenuOptions; corresponding statics onGroupAlign/onNodeAlign/onMenuNodeToSubgraph missing
+/home/z/my-project/worklog.md:199:- Minor logic diffs: openSubgraph drops `checkPanels()` call; processKey adds Tab-key searchbox handler; processMouseDown middle-click drops `alphaPosY` vertical offset for new node placement
+/home/z/my-project/worklog.md:209:- 3 Minor Logic Diffs (openSubgraph missing checkPanels, processKey extra Tab handler, processMouseDown missing alphaPosY offset)
+/home/z/my-project/worklog.md:508:- LGraphCanvas.checkPanels: complete rewrite — restored original DOM-query algorithm. Queries `this.canvas.parentNode.querySelectorAll(".litegraph.dialog")` and closes any panel whose `panel.node.graph` is missing or whose `panel.graph` differs from the canvas's current graph. The refactored version only checked `this.node_panel` and `this.options_panel` explicitly, missing subgraph dialogs and other dialog panels.
+/home/z/my-project/worklog.md:509:- LGraphCanvas.openSubgraph: restored `this.checkPanels()` call after `graph.attachCanvas(this)` — closes stale panels from the parent graph when entering a subgraph.
+/home/z/my-project/worklog.md:511:- LGraphCanvas.drawSubgraphPanelRight: restored right-aligned title text using `ctx.measureText(title_text).width` so "Graph Outputs" sits flush against the right edge of the panel (`canvas_w - tw - 20`). The refactored version left-aligned at `canvas_w - w`.
+/home/z/my-project/worklog.md:577:  - showLinkMenu, createDefaultNodeForSlot, showConnectionMenu, prompt, showSearchBox, showEditPropertyValue, createDialog, createPanel, closePanels, showShowGraphOptionsPanel, showShowNodePanel, showSubgraphPropertiesDialog, showSubgraphPropertiesDialogRight, getCanvasMenuOptions, getNodeMenuOptions, getGroupMenuOptions, processContextMenu
+/home/z/my-project/tool-results/read_1782569103967_bc6e3d3025e8.txt:280:  6204→                                                //open subgraph button
+/home/z/my-project/tool-results/read_1782569103967_bc6e3d3025e8.txt:281:  6205→                                                if(node.subgraph && !node.skip_subgraph_button)
+/home/z/my-project/tool-results/read_1782569103967_bc6e3d3025e8.txt:286:  6210→                                                                        that.openSubgraph(node.subgraph);
+/home/z/my-project/tool-results/read_1782523761106_a484d0c4d7a2.txt:356:  1790→            LiteGraph.GraphInput,
+/home/z/my-project/tool-results/read_1782569103097_c2f6dc1c2685.txt:114:   114→   114→    //subgraph_data
+/home/z/my-project/tool-results/read_1782569103097_c2f6dc1c2685.txt:625:   625→   625→        node.constructor === LiteGraph.Subgraph &&
+/home/z/my-project/tool-results/read_1782569103097_c2f6dc1c2685.txt:981:   981→   981→      LiteGraph.GraphInput,
+/home/z/my-project/tool-results/read_1782524499314_6c72537dad2a.txt:280:  6204→                                                //open subgraph button
+/home/z/my-project/tool-results/read_1782524499314_6c72537dad2a.txt:281:  6205→                                                if(node.subgraph && !node.skip_subgraph_button)
+/home/z/my-project/tool-results/read_1782524499314_6c72537dad2a.txt:286:  6210→                                                                        that.openSubgraph(node.subgraph);
+/home/z/my-project/tool-results/read_1782569116037_fe35b969d94b.txt:280:   280→                                                //open subgraph button
+/home/z/my-project/tool-results/read_1782569116037_fe35b969d94b.txt:281:   281→                                                if(node.subgraph && !node.skip_subgraph_button)
+/home/z/my-project/tool-results/read_1782569116037_fe35b969d94b.txt:286:   286→                                                                        that.openSubgraph(node.subgraph);
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:6:     6→ * rendering, context menus, search boxes, and subgraph navigation.
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:258:   258→        // remove the graph stack in case a subgraph was open
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:264:   264→    /** returns the top level graph (in case there are subgraphs open on the canvas) */
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:272:   272→    openSubgraph(graph) {
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:289:   289→    /** closes a subgraph contained inside a node */
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:290:   290→    closeSubgraph() {
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:292:   292→        const subgraph_node = this.graph._subgraph_node;
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:298:   298→        if (subgraph_node) {
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:299:   299→            this.centerOnNode(subgraph_node);
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:300:   300→            this.selectNodes([subgraph_node]);
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:838:   838→                        // open subgraph button
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:839:   839→                        if (node.subgraph && !node.skip_subgraph_button) {
+/home/z/my-project/tool-results/read_1782565440421_7754bfcfbe20.txt:848:   848→                                    this.openSubgraph(node.subgraph);
+/home/z/my-project/tool-results/read_1782565439771_53c5047480f5.txt:114:   114→    //subgraph_data
+/home/z/my-project/tool-results/read_1782565439771_53c5047480f5.txt:625:   625→        node.constructor === LiteGraph.Subgraph &&
+/home/z/my-project/tool-results/read_1782565439771_53c5047480f5.txt:981:   981→      LiteGraph.GraphInput,
+/home/z/my-project/tool-results/read_1782571325164_6d56913c08e0.txt:26:  8376→                //show subgraph stack header
+/home/z/my-project/tool-results/read_1782571325164_6d56913c08e0.txt:30:  8380→            var subgraph_node = this.graph._subgraph_node;
+/home/z/my-project/tool-results/read_1782571325164_6d56913c08e0.txt:31:  8381→            ctx.strokeStyle = subgraph_node.bgcolor;
+/home/z/my-project/tool-results/read_1782571325164_6d56913c08e0.txt:37:  8387→            ctx.fillStyle = subgraph_node.bgcolor || "#AAA";
+/home/z/my-project/tool-results/read_1782571325164_6d56913c08e0.txt:41:  8391→                    this._graph_stack[i]._subgraph_node.getTitle() + " >> ";
+/home/z/my-project/tool-results/read_1782571325164_6d56913c08e0.txt:44:  8394→                title + subgraph_node.getTitle(),
+/home/z/my-project/tool-results/read_1782569614124_003873d11aca.txt:134:   134→   147→        // use this if you must have node IDs that are unique across all graphs and subgraphs.
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:492: 12778→        LGraphCanvas.prototype.showSubgraphPropertiesDialog = function(node)
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:494: 12780→                console.log("showing subgraph properties dialog");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:496: 12782→                var old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:500: 12786→                var panel = this.createPanel("Subgraph Inputs",{closable:true, width: 500});
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:502: 12788→                panel.classList.add("subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:513: 12799→                                        if(input.not_subgraph_input)
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:516: 12802→                                        var elem = panel.addHTML(html,"subgraph_property");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:530: 12816→                var elem = panel.addHTML(html,"subgraph_property extra", true);
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:547: 12833→    LGraphCanvas.prototype.showSubgraphPropertiesDialogRight = function (node) {
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:549: 12835→        // console.log("showing subgraph properties dialog");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:552: 12838→        var old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:556: 12842→        var panel = this.createPanel("Subgraph Outputs", { closable: true, width: 500 });
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:558: 12844→        panel.classList.add("subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:566: 12852→                    if (input.not_subgraph_output)
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:569: 12855→                    var elem = panel.addHTML(html, "subgraph_property");
+/home/z/my-project/tool-results/read_1782569150202_32ec2f82efde.txt:583: 12869→        var elem = panel.addHTML(html, "subgraph_property extra", true);
+/home/z/my-project/public/litegraph.css:418:.litegraph .subgraph_property {
+/home/z/my-project/public/litegraph.css:422:.litegraph .subgraph_property:hover {
+/home/z/my-project/public/litegraph.css:426:.litegraph .subgraph_property.extra {
+/home/z/my-project/public/litegraph.css:430:.litegraph .subgraph_property span.name {
+/home/z/my-project/public/litegraph.css:435:.litegraph .subgraph_property span.type {
+/home/z/my-project/public/litegraph.css:441:.litegraph .subgraph_property span.label {
+/home/z/my-project/public/litegraph.css:447:.litegraph .subgraph_property input {
+/home/z/my-project/public/litegraph.css:458:.litegraph .subgraph_property button {
+/home/z/my-project/public/litegraph.css:467:.litegraph .subgraph_property.extra {
+/home/z/my-project/public/litegraph.css:471:.litegraph .subgraph_property.extra input {
+/home/z/my-project/public/litegraph.css:637:.litegraph .dialog .dialog-content .subgraph_property {
+/home/z/my-project/public/litegraph.css:643:.litegraph .dialog .dialog-footer .subgraph_property {
+/home/z/my-project/public/litegraph.css:649:.litegraph .dialog .dialog-footer .subgraph_property .name {
+/home/z/my-project/tool-results/read_1782626440088_f1c072ba0409.txt:114:   114→    //subgraph_data
+/home/z/my-project/tool-results/read_1782626440088_f1c072ba0409.txt:630:   630→        node.constructor === LiteGraph.Subgraph &&
+/home/z/my-project/tool-results/read_1782626440088_f1c072ba0409.txt:1038:  1038→      LiteGraph.GraphInput,
+/home/z/my-project/tool-results/read_1782569098825_53c5047480f5.txt:114:   114→    //subgraph_data
+/home/z/my-project/tool-results/read_1782569098825_53c5047480f5.txt:625:   625→        node.constructor === LiteGraph.Subgraph &&
+/home/z/my-project/tool-results/read_1782569098825_53c5047480f5.txt:981:   981→      LiteGraph.GraphInput,
+/home/z/my-project/tool-results/read_1782570732043_bc6e3d3025e8.txt:280:  6204→                                                //open subgraph button
+/home/z/my-project/tool-results/read_1782570732043_bc6e3d3025e8.txt:281:  6205→                                                if(node.subgraph && !node.skip_subgraph_button)
+/home/z/my-project/tool-results/read_1782570732043_bc6e3d3025e8.txt:286:  6210→                                                                        that.openSubgraph(node.subgraph);
+/home/z/my-project/tool-results/read_1782569103674_025a8fc2aef9.txt:134:   147→        // use this if you must have node IDs that are unique across all graphs and subgraphs.
+/home/z/my-project/tool-results/read_1782569100288_bc6e3d3025e8.txt:280:  6204→                                                //open subgraph button
+/home/z/my-project/tool-results/read_1782569100288_bc6e3d3025e8.txt:281:  6205→                                                if(node.subgraph && !node.skip_subgraph_button)
+/home/z/my-project/tool-results/read_1782569100288_bc6e3d3025e8.txt:286:  6210→                                                                        that.openSubgraph(node.subgraph);
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:492: 12778→        LGraphCanvas.prototype.showSubgraphPropertiesDialog = function(node)
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:494: 12780→                console.log("showing subgraph properties dialog");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:496: 12782→                var old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:500: 12786→                var panel = this.createPanel("Subgraph Inputs",{closable:true, width: 500});
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:502: 12788→                panel.classList.add("subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:513: 12799→                                        if(input.not_subgraph_input)
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:516: 12802→                                        var elem = panel.addHTML(html,"subgraph_property");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:530: 12816→                var elem = panel.addHTML(html,"subgraph_property extra", true);
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:547: 12833→    LGraphCanvas.prototype.showSubgraphPropertiesDialogRight = function (node) {
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:549: 12835→        // console.log("showing subgraph properties dialog");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:552: 12838→        var old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:556: 12842→        var panel = this.createPanel("Subgraph Outputs", { closable: true, width: 500 });
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:558: 12844→        panel.classList.add("subgraph_dialog");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:566: 12852→                    if (input.not_subgraph_output)
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:569: 12855→                    var elem = panel.addHTML(html, "subgraph_property");
+/home/z/my-project/tool-results/read_1782569145063_32ec2f82efde.txt:583: 12869→        var elem = panel.addHTML(html, "subgraph_property extra", true);
+/home/z/my-project/tool-results/read_1782570740965_e58837f65783.txt:280:   280→                                                //open subgraph button
+/home/z/my-project/tool-results/read_1782570740965_e58837f65783.txt:281:   281→                                                if(node.subgraph && !node.skip_subgraph_button)
+/home/z/my-project/tool-results/read_1782570740965_e58837f65783.txt:286:   286→                                                                        that.openSubgraph(node.subgraph);
+/home/z/my-project/tool-results/read_1782569116993_01cb010afa34.txt:114:   114→   114→   114→    //subgraph_data
+/home/z/my-project/tool-results/read_1782569116993_01cb010afa34.txt:625:   625→   625→   625→        node.constructor === LiteGraph.Subgraph &&
+/home/z/my-project/tool-results/read_1782569116993_01cb010afa34.txt:981:   981→   981→   981→      LiteGraph.GraphInput,
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1754:  7313→    showSubgraphPropertiesDialog(node) {
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1755:  7314→        console.log("showing subgraph properties dialog");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1757:  7316→        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1761:  7320→        const panel = this.createPanel("Subgraph Inputs", { closable: true, width: 500 });
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1763:  7322→        panel.classList.add("subgraph_dialog");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1772:  7331→                    if (input.not_subgraph_input)
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1775:  7334→                    const elem = panel.addHTML(html, "subgraph_property");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1789:  7348→        const elem = panel.addHTML(html, "subgraph_property extra", true);
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1807:  7366→    showSubgraphPropertiesDialogRight(node) {
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1808:  7367→        // console.log("showing subgraph properties dialog");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1810:  7369→        const old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1814:  7373→        const panel = this.createPanel("Subgraph Outputs", { closable: true, width: 500 });
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1816:  7375→        panel.classList.add("subgraph_dialog");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1824:  7383→                    if (input.not_subgraph_output)
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1827:  7386→                    const elem = panel.addHTML(html, "subgraph_property");
+/home/z/my-project/tool-results/read_1782565455559_541fd84c45b7.txt:1841:  7400→        const elem = panel.addHTML(html, "subgraph_property extra", true);
+/home/z/my-project/tool-results/read_1782571334134_e76506437c57.txt:26:    26→  8376→                //show subgraph stack header
+/home/z/my-project/tool-results/read_1782571334134_e76506437c57.txt:30:    30→  8380→            var subgraph_node = this.graph._subgraph_node;
+/home/z/my-project/tool-results/read_1782571334134_e76506437c57.txt:31:    31→  8381→            ctx.strokeStyle = subgraph_node.bgcolor;
+/home/z/my-project/tool-results/read_1782571334134_e76506437c57.txt:37:    37→  8387→            ctx.fillStyle = subgraph_node.bgcolor || "#AAA";
+/home/z/my-project/tool-results/read_1782571334134_e76506437c57.txt:41:    41→  8391→                    this._graph_stack[i]._subgraph_node.getTitle() + " >> ";
+/home/z/my-project/tool-results/read_1782571334134_e76506437c57.txt:44:    44→  8394→                title + subgraph_node.getTitle(),
+/home/z/my-project/tool-results/read_1782569609345_abc0d4f16e3f.txt:134:   147→        // use this if you must have node IDs that are unique across all graphs and subgraphs.
+/home/z/my-project/public/litegraph.original.js:149:        // use this if you must have node IDs that are unique across all graphs and subgraphs.
+/home/z/my-project/public/litegraph.original.js:921:        //subgraph_data
+/home/z/my-project/public/litegraph.original.js:1430:                node.constructor === LiteGraph.Subgraph &&
+/home/z/my-project/public/litegraph.original.js:1792:            LiteGraph.GraphInput,
+/home/z/my-project/public/litegraph.original.js:5528:		//remove the graph stack in case a subgraph was open
+/home/z/my-project/public/litegraph.original.js:5536:     * returns the top level graph (in case there are subgraphs open on the canvas)
+/home/z/my-project/public/litegraph.original.js:5551:     * @method openSubgraph
+/home/z/my-project/public/litegraph.original.js:5554:    LGraphCanvas.prototype.openSubgraph = function(graph) {
+/home/z/my-project/public/litegraph.original.js:5578:     * closes a subgraph contained inside a node
+/home/z/my-project/public/litegraph.original.js:5580:     * @method closeSubgraph
+/home/z/my-project/public/litegraph.original.js:5583:    LGraphCanvas.prototype.closeSubgraph = function() {
+/home/z/my-project/public/litegraph.original.js:5587:        var subgraph_node = this.graph._subgraph_node;
+/home/z/my-project/public/litegraph.original.js:5593:        if (subgraph_node) {
+/home/z/my-project/public/litegraph.original.js:5594:            this.centerOnNode(subgraph_node);
+/home/z/my-project/public/litegraph.original.js:5595:            this.selectNodes([subgraph_node]);
+/home/z/my-project/public/litegraph.original.js:6206:						//open subgraph button
+/home/z/my-project/public/litegraph.original.js:6207:						if(node.subgraph && !node.skip_subgraph_button)
+/home/z/my-project/public/litegraph.original.js:6212:									that.openSubgraph(node.subgraph);
+/home/z/my-project/public/litegraph.original.js:8098:			this.drawSubgraphPanel( ctx );
+/home/z/my-project/public/litegraph.original.js:8117:     * draws the panel in the corner that shows subgraph properties
+/home/z/my-project/public/litegraph.original.js:8118:     * @method drawSubgraphPanel
+/home/z/my-project/public/litegraph.original.js:8120:    LGraphCanvas.prototype.drawSubgraphPanel = function (ctx) {
+/home/z/my-project/public/litegraph.original.js:8121:        var subgraph = this.graph;
+/home/z/my-project/public/litegraph.original.js:8122:        var subnode = subgraph._subgraph_node;
+/home/z/my-project/public/litegraph.original.js:8124:            console.warn("subgraph without subnode");
+/home/z/my-project/public/litegraph.original.js:8127:        this.drawSubgraphPanelLeft(subgraph, subnode, ctx)
+/home/z/my-project/public/litegraph.original.js:8128:        this.drawSubgraphPanelRight(subgraph, subnode, ctx)
+/home/z/my-project/public/litegraph.original.js:8131:    LGraphCanvas.prototype.drawSubgraphPanelLeft = function (subgraph, subnode, ctx) {
+/home/z/my-project/public/litegraph.original.js:8150:            this.closeSubgraph();
+/home/z/my-project/public/litegraph.original.js:8159:                if (input.not_subgraph_input)
+/home/z/my-project/public/litegraph.original.js:8164:                    var type = subnode.constructor.input_node_type || "graph/input";
+/home/z/my-project/public/litegraph.original.js:8168:                        subgraph.add(newnode);
+/home/z/my-project/public/litegraph.original.js:8196:            this.showSubgraphPropertiesDialog(subnode);
+/home/z/my-project/public/litegraph.original.js:8199:    LGraphCanvas.prototype.drawSubgraphPanelRight = function (subgraph, subnode, ctx) {
+/home/z/my-project/public/litegraph.original.js:8220:            this.closeSubgraph();
+/home/z/my-project/public/litegraph.original.js:8229:                if (output.not_subgraph_input)
+/home/z/my-project/public/litegraph.original.js:8234:                    var type = subnode.constructor.output_node_type || "graph/output";
+/home/z/my-project/public/litegraph.original.js:8238:                        subgraph.add(newnode);
+/home/z/my-project/public/litegraph.original.js:8266:            this.showSubgraphPropertiesDialogRight(subnode);
+/home/z/my-project/public/litegraph.original.js:8378:		//show subgraph stack header
+/home/z/my-project/public/litegraph.original.js:8382:            var subgraph_node = this.graph._subgraph_node;
+/home/z/my-project/public/litegraph.original.js:8383:            ctx.strokeStyle = subgraph_node.bgcolor;
+/home/z/my-project/public/litegraph.original.js:8389:            ctx.fillStyle = subgraph_node.bgcolor || "#AAA";
+/home/z/my-project/public/litegraph.original.js:8393:                    this._graph_stack[i]._subgraph_node.getTitle() + " >> ";
+/home/z/my-project/public/litegraph.original.js:8396:                title + subgraph_node.getTitle(),
+/home/z/my-project/public/litegraph.original.js:9265:			//subgraph box
+/home/z/my-project/public/litegraph.original.js:9266:			if (!node.flags.collapsed && node.subgraph && !node.skip_subgraph_button) {
+/home/z/my-project/public/litegraph.original.js:12780:	LGraphCanvas.prototype.showSubgraphPropertiesDialog = function(node)
+/home/z/my-project/public/litegraph.original.js:12782:		console.log("showing subgraph properties dialog");
+/home/z/my-project/public/litegraph.original.js:12784:		var old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/public/litegraph.original.js:12788:		var panel = this.createPanel("Subgraph Inputs",{closable:true, width: 500});
+/home/z/my-project/public/litegraph.original.js:12790:		panel.classList.add("subgraph_dialog");
+/home/z/my-project/public/litegraph.original.js:12801:					if(input.not_subgraph_input)
+/home/z/my-project/public/litegraph.original.js:12804:					var elem = panel.addHTML(html,"subgraph_property");
+/home/z/my-project/public/litegraph.original.js:12818:		var elem = panel.addHTML(html,"subgraph_property extra", true);
+/home/z/my-project/public/litegraph.original.js:12835:    LGraphCanvas.prototype.showSubgraphPropertiesDialogRight = function (node) {
+/home/z/my-project/public/litegraph.original.js:12837:        // console.log("showing subgraph properties dialog");
+/home/z/my-project/public/litegraph.original.js:12840:        var old_panel = this.canvas.parentNode.querySelector(".subgraph_dialog");
+/home/z/my-project/public/litegraph.original.js:12844:        var panel = this.createPanel("Subgraph Outputs", { closable: true, width: 500 });
+/home/z/my-project/public/litegraph.original.js:12846:        panel.classList.add("subgraph_dialog");
+/home/z/my-project/public/litegraph.original.js:12854:                    if (input.not_subgraph_output)
+/home/z/my-project/public/litegraph.original.js:12857:                    var elem = panel.addHTML(html, "subgraph_property");
+/home/z/my-project/public/litegraph.original.js:12871:        var elem = panel.addHTML(html, "subgraph_property extra", true);
+/home/z/my-project/public/litegraph.original.js:13103:    LGraphCanvas.onMenuNodeToSubgraph = function(value, options, e, menu, node) {
+/home/z/my-project/public/litegraph.original.js:13113:		var subgraph_node = LiteGraph.createNode("graph/subgraph");
+/home/z/my-project/public/litegraph.original.js:13114:		subgraph_node.pos = node.pos.concat();
+/home/z/my-project/public/litegraph.original.js:13115:		graph.add(subgraph_node);
+/home/z/my-project/public/litegraph.original.js:13117:		subgraph_node.buildFromNodes( nodes_list );
+/home/z/my-project/public/litegraph.original.js:13206:                    content: "Close subgraph",
+/home/z/my-project/public/litegraph.original.js:13207:                    callback: this.closeSubgraph.bind(this)
+/home/z/my-project/public/litegraph.original.js:13314:			content: "To Subgraph",
+/home/z/my-project/public/litegraph.original.js:13315:			callback: LGraphCanvas.onMenuNodeToSubgraph
+/home/z/my-project/public/litegraph.original.js:14448:    //Subgraph: a node that contains a graph
+/home/z/my-project/public/litegraph.original.js:14449:    function Subgraph() {
+/home/z/my-project/public/litegraph.original.js:14456:        this.subgraph = new LiteGraph.LGraph();
+/home/z/my-project/public/litegraph.original.js:14457:        this.subgraph._subgraph_node = this;
+/home/z/my-project/public/litegraph.original.js:14458:        this.subgraph._is_subgraph = true;
+/home/z/my-project/public/litegraph.original.js:14460:        this.subgraph.onTrigger = this.onSubgraphTrigger.bind(this);
+/home/z/my-project/public/litegraph.original.js:14463:        this.subgraph.onInputAdded = this.onSubgraphNewInput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14464:        this.subgraph.onInputRenamed = this.onSubgraphRenamedInput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14465:        this.subgraph.onInputTypeChanged = this.onSubgraphTypeChangeInput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14466:        this.subgraph.onInputRemoved = this.onSubgraphRemovedInput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14468:        this.subgraph.onOutputAdded = this.onSubgraphNewOutput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14469:        this.subgraph.onOutputRenamed = this.onSubgraphRenamedOutput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14470:        this.subgraph.onOutputTypeChanged = this.onSubgraphTypeChangeOutput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14471:        this.subgraph.onOutputRemoved = this.onSubgraphRemovedOutput.bind(this);
+/home/z/my-project/public/litegraph.original.js:14474:    Subgraph.title = "Subgraph";
+/home/z/my-project/public/litegraph.original.js:14475:    Subgraph.desc = "Graph inside a node";
+/home/z/my-project/public/litegraph.original.js:14476:    Subgraph.title_color = "#334";
+/home/z/my-project/public/litegraph.original.js:14478:    Subgraph.prototype.onGetInputs = function() {
+/home/z/my-project/public/litegraph.original.js:14483:    Subgraph.prototype.onDrawTitle = function(ctx) {
+/home/z/my-project/public/litegraph.original.js:14501:    Subgraph.prototype.onDblClick = function(e, pos, graphcanvas) {
+/home/z/my-project/public/litegraph.original.js:14504:            graphcanvas.openSubgraph(that.subgraph);
+/home/z/my-project/public/litegraph.original.js:14509:    Subgraph.prototype.onMouseDown = function(e, pos, graphcanvas) {
+/home/z/my-project/public/litegraph.original.js:14517:                graphcanvas.openSubgraph(that.subgraph);
+/home/z/my-project/public/litegraph.original.js:14523:    Subgraph.prototype.onAction = function(action, param) {
+/home/z/my-project/public/litegraph.original.js:14524:        this.subgraph.onAction(action, param);
+/home/z/my-project/public/litegraph.original.js:14527:    Subgraph.prototype.onExecute = function() {
+/home/z/my-project/public/litegraph.original.js:14533:        //send inputs to subgraph global inputs
+/home/z/my-project/public/litegraph.original.js:14538:                this.subgraph.setInputData(input.name, value);
+/home/z/my-project/public/litegraph.original.js:14543:        this.subgraph.runStep();
+/home/z/my-project/public/litegraph.original.js:14545:        //send subgraph global outputs to outputs
+/home/z/my-project/public/litegraph.original.js:14549:                var value = this.subgraph.getOutputData(output.name);
+/home/z/my-project/public/litegraph.original.js:14555:    Subgraph.prototype.sendEventToAllNodes = function(eventname, param, mode) {
+/home/z/my-project/public/litegraph.original.js:14557:            this.subgraph.sendEventToAllNodes(eventname, param, mode);
+/home/z/my-project/public/litegraph.original.js:14561:    Subgraph.prototype.onDrawBackground = function (ctx, graphcanvas, canvas, pos) {
+/home/z/my-project/public/litegraph.original.js:14597:    // Subgraph.prototype.onMouseDown = function(e, localpos, graphcanvas)
+/home/z/my-project/public/litegraph.original.js:14602:    // 		graphcanvas.showSubgraphPropertiesDialog(this);
+/home/z/my-project/public/litegraph.original.js:14605:    Subgraph.prototype.onMouseDown = function (e, localpos, graphcanvas) {
+/home/z/my-project/public/litegraph.original.js:14611:                graphcanvas.showSubgraphPropertiesDialog(this);
+/home/z/my-project/public/litegraph.original.js:14614:                graphcanvas.showSubgraphPropertiesDialogRight(this);
+/home/z/my-project/public/litegraph.original.js:14618:	Subgraph.prototype.computeSize = function()
+/home/z/my-project/public/litegraph.original.js:14626:    Subgraph.prototype.onSubgraphTrigger = function(event, param) {
+/home/z/my-project/public/litegraph.original.js:14633:    Subgraph.prototype.onSubgraphNewInput = function(name, type) {
+/home/z/my-project/public/litegraph.original.js:14641:    Subgraph.prototype.onSubgraphRenamedInput = function(oldname, name) {
+/home/z/my-project/public/litegraph.original.js:14650:    Subgraph.prototype.onSubgraphTypeChangeInput = function(name, type) {
+/home/z/my-project/public/litegraph.original.js:14659:    Subgraph.prototype.onSubgraphRemovedInput = function(name) {
+
+[Showing results with pagination = limit: 250]

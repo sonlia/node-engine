@@ -1,0 +1,781 @@
+     1→/**
+     2→ * LiteGraph - The Global Registry
+     3→ * 
+     4→ * Refactored from a plain object literal to an ES6 class with static members.
+     5→ * This is the central registry for all node types, constants, and configuration.
+     6→ * 
+     7→ * Original: var LiteGraph = global.LiteGraph = { ... }
+     8→ * Refactored: class LiteGraph with static properties and methods
+     9→ */
+    10→
+    11→import { cloneObject, uuidv4, getTime, getParameterNames } from "./utils.js";
+    12→
+    13→class LiteGraphClass {
+    14→  // ===================== VERSION =====================
+    15→  static VERSION = 0.4;
+    16→
+    17→  // ===================== CANVAS =====================
+    18→  static CANVAS_GRID_SIZE = 10;
+    19→
+    20→  // ===================== NODE RENDERING =====================
+    21→  static NODE_TITLE_HEIGHT = 30;
+    22→  static NODE_TITLE_TEXT_Y = 20;
+    23→  static NODE_SLOT_HEIGHT = 20;
+    24→  static NODE_WIDGET_HEIGHT = 20;
+    25→  static NODE_WIDTH = 140;
+    26→  static NODE_MIN_WIDTH = 50;
+    27→  static NODE_COLLAPSED_RADIUS = 10;
+    28→  static NODE_COLLAPSED_WIDTH = 80;
+    29→  static NODE_TITLE_COLOR = "#999";
+    30→  static NODE_SELECTED_TITLE_COLOR = "#FFF";
+    31→  static NODE_TEXT_SIZE = 14;
+    32→  static NODE_TEXT_COLOR = "#AAA";
+    33→  static NODE_SUBTEXT_SIZE = 12;
+    34→  static NODE_DEFAULT_COLOR = "#333";
+    35→  static NODE_DEFAULT_BGCOLOR = "#353535";
+    36→  static NODE_DEFAULT_BOXCOLOR = "#666";
+    37→  static NODE_DEFAULT_SHAPE = "box";
+    38→  static NODE_BOX_OUTLINE_COLOR = "#FFF";
+    39→  static DEFAULT_SHADOW_COLOR = "rgba(0,0,0,0.5)";
+    40→  static DEFAULT_GROUP_FONT = 24;
+    41→
+    42→  // ===================== WIDGET =====================
+    43→  static WIDGET_BGCOLOR = "#222";
+    44→  static WIDGET_OUTLINE_COLOR = "#666";
+    45→  static WIDGET_TEXT_COLOR = "#DDD";
+    46→  static WIDGET_SECONDARY_TEXT_COLOR = "#999";
+    47→
+    48→  // ===================== LINK =====================
+    49→  static LINK_COLOR = "#9A9";
+    50→  static EVENT_LINK_COLOR = "#A86";
+    51→  static CONNECTING_LINK_COLOR = "#AFA";
+    52→
+    53→  // ===================== LIMITS =====================
+    54→  static MAX_NUMBER_OF_NODES = 1000;
+    55→  static DEFAULT_POSITION = [100, 100];
+    56→  static VALID_SHAPES = ["default", "box", "round", "card"];
+    57→
+    58→  // ===================== SHAPES =====================
+    59→  static BOX_SHAPE = 1;
+    60→  static ROUND_SHAPE = 2;
+    61→  static CIRCLE_SHAPE = 3;
+    62→  static CARD_SHAPE = 4;
+    63→  static ARROW_SHAPE = 5;
+    64→  static GRID_SHAPE = 6;
+    65→  static TRIANGLE_SHAPE = 7; // exec slot 专用形状（三角形，区别于圆形）
+    66→
+    67→  // ===================== DIRECTION =====================
+    68→  static INPUT = 1;
+    69→  static OUTPUT = 2;
+    70→
+    71→  // ===================== EVENT/ACTION =====================
+    72→  static EVENT = -1;
+    73→  static ACTION = -1;
+    74→
+    75→  // ===================== NODE MODES =====================
+    76→  static NODE_MODES = ["Always", "On Event", "Never", "On Trigger"];
+    77→  static NODE_MODES_COLORS = ["#666", "#422", "#333", "#224", "#626"];
+    78→  static ALWAYS = 0;
+    79→  static ON_EVENT = 1;
+    80→  static NEVER = 2;
+    81→  static ON_TRIGGER = 3;
+    82→
+    83→  // ===================== ORIENTATION =====================
+    84→  static UP = 1;
+    85→  static DOWN = 2;
+    86→  static LEFT = 3;
+    87→  static RIGHT = 4;
+    88→  static CENTER = 5;
+    89→
+    90→  // ===================== LINK RENDERING =====================
+    91→  static LINK_RENDER_MODES = ["Straight", "Linear", "Spline"];
+    92→  static STRAIGHT_LINK = 0;
+    93→  static LINEAR_LINK = 1;
+    94→  static SPLINE_LINK = 2;
+    95→
+    96→  // ===================== TITLE MODES =====================
+    97→  static NORMAL_TITLE = 0;
+    98→  static NO_TITLE = 1;
+    99→  static TRANSPARENT_TITLE = 2;
+   100→  static AUTOHIDE_TITLE = 3;
+   101→  static VERTICAL_LAYOUT = "vertical";
+   102→
+   103→  // ===================== REGISTRY =====================
+   104→  static registered_node_types = {};
+   105→  static node_types_by_file_extension = {};
+   106→  static Nodes = {};
+   107→  static Globals = {};
+   108→
+   109→  // ===================== SEARCH =====================
+   110→  static searchbox_extras = {};
+   111→
+   112→  // ===================== CONFIG FLAGS =====================
+   113→  static auto_sort_node_types = false;
+   114→  static node_box_coloured_when_on = false;
+   115→  static node_box_coloured_by_mode = false;
+   116→  static dialog_close_on_mouse_leave = true;
+   117→  static dialog_close_on_mouse_leave_delay = 500;
+   118→  static shift_click_do_break_link_from = false;
+   119→  static click_do_break_link_to = false;
+   120→  static search_hide_on_mouse_leave = true;
+   121→  static search_filter_enabled = false;
+   122→  static search_show_all_on_open = true;
+   123→  static auto_load_slot_types = false;
+   124→
+   125→  // ===================== SLOT TYPES =====================
+   126→  static registered_slot_in_types = {};
+   127→  static registered_slot_out_types = {};
+   128→  static slot_types_in = [];
+   129→  static slot_types_out = [];
+   130→  static slot_types_default_in = [];
+   131→  static slot_types_default_out = [];
+   132→
+   133→  // ===================== BEHAVIOR =====================
+   134→  static alt_drag_do_clone_nodes = false;
+   135→  static do_add_triggers_slots = false;
+   136→  static allow_multi_output_for_events = true;
+   137→  static middle_click_slot_add_default_node = false;
+   138→  static release_link_on_empty_shows_menu = false;
+   139→  // Match original default: "mouse" (use mouse for retrocompatibility).
+   140→  // The earlier refactored version changed this to "pointer" which broke
+   141→  // touch-device fallback in pointerListenerAdd when PointerEvent wasn't
+   142→  // available (older iOS Safari, etc.).
+   143→  static pointerevents_method = "mouse";
+   144→  static ctrl_shift_v_paste_connect_unselected_outputs = false;
+   145→  static use_uuids = false;
+   146→
+   147→  // ===================== OTHER =====================
+   148→  static proxy = null;
+   149→  static node_images_path = "";
+   150→  static debug = false;
+   151→  static catch_exceptions = true;
+   152→  static throw_errors = true;
+   153→  static allow_scripts = false;
+   154→  static use_deferred_actions = true;
+   155→
+   156→  /**
+   157→   * Register a node class so it can be listed when the user wants to create a new one.
+   158→   * In the original code, this uses a mixin pattern (copying LGraphNode.prototype methods).
+   159→   * In ES6 refactored version, registered nodes MUST extend LGraphNode.
+   160→   * 
+   161→   * @static
+   162→   * @param {string} type - Name of the node and path (e.g. "math/sin")
+   163→   * @param {class} baseClass - Class extending LGraphNode
+   164→   */
+   165→  static registerNodeType(type, baseClass) {
+   166→    if (!baseClass.prototype) {
+   167→      throw new Error("Cannot register a simple object, it must be a class with a prototype");
+   168→    }
+   169→
+   170→    baseClass.type = type;
+   171→
+   172→    if (LiteGraph.debug) {
+   173→      console.log("Node registered: " + type);
+   174→    }
+   175→
+   176→    const classname = baseClass.name;
+   177→    const pos = type.lastIndexOf("/");
+   178→    baseClass.category = type.substring(0, pos);
+   179→
+   180→    if (!baseClass.title) {
+   181→      baseClass.title = classname;
+   182→    }
+   183→
+   184→    // In ES6 refactored version, nodes MUST extend LGraphNode
+   185→    // We no longer do the mixin pattern, but we still verify the prototype chain
+   186→    const LGraphNode = LiteGraphClass._LGraphNode;
+   187→    if (LGraphNode) {
+   188→      if (!(baseClass.prototype instanceof LGraphNode)) {
+   189→        // Fallback: mixin for backward compatibility
+   190→        for (const i in LGraphNode.prototype) {
+   191→          if (baseClass.prototype[i] === undefined) {
+   192→            baseClass.prototype[i] = LGraphNode.prototype[i];
+   193→          }
+   194→        }
+   195→      }
+   196→    } else {
+   197→      // LGraphNode not yet registered - mixin will happen later via index.js
+   198→      // Store pending registration
+   199→      if (!LiteGraphClass._pendingRegistrations) {
+   200→        LiteGraphClass._pendingRegistrations = [];
+   201→      }
+   202→      LiteGraphClass._pendingRegistrations.push(baseClass);
+   203→    }
+   204→
+   205→    const prev = LiteGraph.registered_node_types[type];
+   206→    if (prev) {
+   207→      console.log("replacing node type: " + type);
+   208→    }
+   209→
+   210→    if (!Object.prototype.hasOwnProperty.call(baseClass.prototype, "shape")) {
+   211→      Object.defineProperty(baseClass.prototype, "shape", {
+   212→        set(v) {
+   213→          switch (v) {
+   214→            case "default": delete this._shape; break;
+   215→            case "box": this._shape = LiteGraph.BOX_SHAPE; break;
+   216→            case "round": this._shape = LiteGraph.ROUND_SHAPE; break;
+   217→            case "circle": this._shape = LiteGraph.CIRCLE_SHAPE; break;
+   218→            case "card": this._shape = LiteGraph.CARD_SHAPE; break;
+   219→            default: this._shape = v;
+   220→          }
+   221→        },
+   222→        get() {
+   223→          return this._shape;
+   224→        },
+   225→        enumerable: true,
+   226→        configurable: true,
+   227→      });
+   228→
+   229→      // Used to know which nodes to create when dragging files to the canvas.
+   230→      // Original nests this inside the hasOwnProperty("shape") guard.
+   231→      if (baseClass.supported_extensions) {
+   232→        for (let i = 0; i < baseClass.supported_extensions.length; i++) {
+   233→          const ext = baseClass.supported_extensions[i];
+   234→          if (ext && ext.constructor === String) {
+   235→            LiteGraph.node_types_by_file_extension[ext.toLowerCase()] = baseClass;
+   236→          }
+   237→        }
+   238→      }
+   239→    }
+   240→
+   241→    LiteGraph.registered_node_types[type] = baseClass;
+   242→    if (classname) {
+   243→      LiteGraph.Nodes[classname] = baseClass;
+   244→    }
+   245→
+   246→    // Restored original lifecycle callbacks
+   247→    if (LiteGraph.onNodeTypeRegistered) {
+   248→      LiteGraph.onNodeTypeRegistered(type, baseClass);
+   249→    }
+   250→    if (prev && LiteGraph.onNodeTypeReplaced) {
+   251→      LiteGraph.onNodeTypeReplaced(type, baseClass, prev);
+   252→    }
+   253→
+   254→    // Warnings: original warns about legacy `onPropertyChange` method name.
+   255→    if (baseClass.prototype.onPropertyChange) {
+   256→      console.warn(
+   257→        "LiteGraph node class " +
+   258→          type +
+   259→          " has onPropertyChange method, it must be called onPropertyChanged with d at the end"
+   260→      );
+   261→    }
+   262→
+   263→    // TODO one would want to know input and ouput :: this would allow through registerNodeAndSlotType to get all the slots types
+   264→    if (LiteGraph.auto_load_slot_types) {
+   265→      // Original creates an instance to force addInput/addOutput calls
+   266→      // which then register slot types via registerNodeAndSlotType.
+   267→      try {
+   268→        new baseClass(baseClass.title || "tmpnode");
+   269→      } catch (e) {
+   270→        /* ignore */
+   271→      }
+   272→    }
+   273→  }
+   274→
+   275→  /**
+   276→   * Removes a node type from the system.
+   277→   * Restored original: accepts String OR Class; throws if not found.
+   278→   */
+   279→  static unregisterNodeType(type) {
+   280→    const baseClass =
+   281→      type && type.constructor === String
+   282→        ? LiteGraph.registered_node_types[type]
+   283→        : type;
+   284→    if (!baseClass) {
+   285→      throw new Error("node type not found: " + type);
+   286→    }
+   287→    delete LiteGraph.registered_node_types[baseClass.type];
+   288→    if (baseClass.constructor && baseClass.constructor.name) {
+   289→      delete LiteGraph.Nodes[baseClass.constructor.name];
+   290→    }
+   291→    // Remove from file extensions
+   292→    if (baseClass.supported_extensions) {
+   293→      for (let i = 0; i < baseClass.supported_extensions.length; i++) {
+   294→        const ext = baseClass.supported_extensions[i];
+   295→        if (ext && ext.constructor === String) {
+   296→          delete LiteGraph.node_types_by_file_extension[ext.toLowerCase()];
+   297→        }
+   298→      }
+   299→    }
+   300→  }
+   301→
+   302→  /**
+   303→   * Save a slot type and its node.
+   304→   * Restored original behaviour: default out=false (input direction),
+   305→   * EVENT/ACTION → "_event_" mapping, comma-split, toLowerCase + sort.
+   306→   */
+   307→  static registerNodeAndSlotType(type, slot_type, out) {
+   308→    out = out || false;
+   309→    const base_class =
+   310→      type && type.constructor === String &&
+   311→      LiteGraph.registered_node_types[type] !== "anonymous"
+   312→        ? LiteGraph.registered_node_types[type]
+   313→        : type;
+   314→
+   315→    // Match original: `base_class.constructor.type` — for a class this is
+   316→    // the static `type` field set by registerNodeType.
+   317→    const class_type = (base_class && base_class.constructor && base_class.constructor.type) ||
+   318→                       (base_class && base_class.type) ||
+   319→                       (type && type.constructor === String ? type : type && type.name);
+   320→
+   321→    let allTypes = [];
+   322→    if (typeof slot_type === "string") {
+   323→      allTypes = slot_type.split(",");
+   324→    } else if (slot_type === LiteGraph.EVENT || slot_type === LiteGraph.ACTION) {
+   325→      allTypes = ["_event_"];
+   326→    } else {
+   327→      allTypes = ["*"];
+   328→    }
+   329→
+   330→    for (let i = 0; i < allTypes.length; ++i) {
+   331→      let slotType = allTypes[i];
+   332→      if (slotType === "") slotType = "*";
+   333→      const registerTo = out
+   334→        ? "registered_slot_out_types"
+   335→        : "registered_slot_in_types";
+   336→      if (LiteGraph[registerTo][slotType] === undefined) {
+   337→        LiteGraph[registerTo][slotType] = { nodes: [] };
+   338→      }
+   339→      if (!LiteGraph[registerTo][slotType].nodes.includes(class_type)) {
+   340→        LiteGraph[registerTo][slotType].nodes.push(class_type);
+   341→      }
+   342→
+   343→      if (!out) {
+   344→        if (!LiteGraph.slot_types_in.includes(slotType.toLowerCase())) {
+   345→          LiteGraph.slot_types_in.push(slotType.toLowerCase());
+   346→          LiteGraph.slot_types_in.sort();
+   347→        }
+   348→      } else {
+   349→        if (!LiteGraph.slot_types_out.includes(slotType.toLowerCase())) {
+   350→          LiteGraph.slot_types_out.push(slotType.toLowerCase());
+   351→          LiteGraph.slot_types_out.sort();
+   352→        }
+   353→      }
+   354→    }
+   355→  }
+   356→
+   357→  /**
+   358→   * Build a node class from a plain config object.
+   359→   * Restored original (name, object) signature and the Function()-based
+   360→   * constructor that calls addInput/addOutput/addProperty based on the
+   361→   * object's inputs/outputs/properties arrays. Also calls registerNodeType
+   362→   * and returns the class.
+   363→   */
+   364→  static buildNodeClassFromObject(name, object) {
+   365→    let ctor_code = "";
+   366→    if (object.inputs) {
+   367→      for (let i = 0; i < object.inputs.length; ++i) {
+   368→        const _name = object.inputs[i][0];
+   369→        let _type = object.inputs[i][1];
+   370→        if (_type && _type.constructor === String) _type = '"' + _type + '"';
+   371→        ctor_code += "this.addInput('" + _name + "'," + _type + ");\n";
+   372→      }
+   373→    }
+   374→    if (object.outputs) {
+   375→      for (let i = 0; i < object.outputs.length; ++i) {
+   376→        const _name = object.outputs[i][0];
+   377→        let _type = object.outputs[i][1];
+   378→        if (_type && _type.constructor === String) _type = '"' + _type + '"';
+   379→        ctor_code += "this.addOutput('" + _name + "'," + _type + ");\n";
+   380→      }
+   381→    }
+   382→    if (object.properties) {
+   383→      for (let i in object.properties) {
+   384→        let prop = object.properties[i];
+   385→        if (prop && prop.constructor === String) prop = '"' + prop + '"';
+   386→        ctor_code += "this.addProperty('" + i + "'," + prop + ");\n";
+   387→      }
+   388→    }
+   389→    ctor_code += "if(this.onCreate)this.onCreate()";
+   390→    // Use Function() ctor to match original behavior. In strict-mode ES6
+   391→    // modules the Function body runs in non-strict mode, so addInput/addOutput
+   392→    // (which expect `this` to be the instance) work correctly when bound via
+   393→    // .call(this) at instantiation time.
+   394→    const classobj = function () {
+   395→      // Evaluate ctor_code in this context
+   396→      // eslint-disable-next-line no-new-func
+   397→      new Function(ctor_code).call(this);
+   398→    };
+   399→    for (const i in object) {
+   400→      if (i !== "inputs" && i !== "outputs" && i !== "properties") {
+   401→        classobj.prototype[i] = object[i];
+   402→      }
+   403→    }
+   404→    classobj.title = object.title || name.split("/").pop();
+   405→    classobj.desc = object.desc || "Generated from object";
+   406→    // Make sure registerNodeType treats it like a class (needs .prototype)
+   407→    classobj.prototype.constructor = classobj;
+   408→    LiteGraph.registerNodeType(name, classobj);
+   409→    return classobj;
+   410→  }
+   411→
+   412→  /**
+   413→   * Wrap a simple function as a node type.
+   414→   * Restored original signature: param_types is an array of type strings
+   415→   * (or null for no inputs); parameter names are auto-derived via
+   416→   * getParameterNames(func). Uses Function()-based ctor like the original.
+   417→   */
+   418→  static wrapFunctionAsNode(name, func, param_types, return_type, properties) {
+   419→    const params = Array(func.length);
+   420→    let code = "";
+   421→    if (param_types !== null) {
+   422→      // null means no inputs
+   423→      const names = getParameterNames(func);
+   424→      for (let i = 0; i < names.length; ++i) {
+   425→        let type = 0;
+   426→        if (param_types) {
+   427→          if (param_types[i] != null && param_types[i].constructor === String) {
+   428→            type = "'" + param_types[i] + "'";
+   429→          } else if (param_types[i] != null) {
+   430→            type = param_types[i];
+   431→          }
+   432→        }
+   433→        code += "this.addInput('" + names[i] + "'," + type + ");\n";
+   434→      }
+   435→    }
+   436→    if (return_type !== null) {
+   437→      // null means no output
+   438→      code +=
+   439→        "this.addOutput('out'," +
+   440→        (return_type != null
+   441→          ? return_type.constructor === String
+   442→            ? "'" + return_type + "'"
+   443→            : return_type
+   444→          : 0) +
+   445→        ");\n";
+   446→    }
+   447→    if (properties) {
+   448→      code += "this.properties = " + JSON.stringify(properties) + ";\n";
+   449→    }
+   450→
+   451→    const classobj = function () {
+   452→      // eslint-disable-next-line no-new-func
+   453→      new Function(code).call(this);
+   454→    };
+   455→    classobj.title = name.split("/").pop();
+   456→    classobj.desc = "Generated from " + (func.name || "anonymous");
+   457→    classobj.prototype.onExecute = function onExecute() {
+   458→      for (let i = 0; i < params.length; ++i) {
+   459→        params[i] = this.getInputData(i);
+   460→      }
+   461→      const r = func.apply(this, params);
+   462→      this.setOutputData(0, r);
+   463→    };
+   464→    classobj.prototype.constructor = classobj;
+   465→    LiteGraph.registerNodeType(name, classobj);
+   466→    return classobj;
+   467→  }
+   468→
+   469→  /**
+   470→   * Clear all registered types.
+   471→   * Restored original: also resets searchbox_extras (was dropped).
+   472→   */
+   473→  static clearRegisteredTypes() {
+   474→    LiteGraph.registered_node_types = {};
+   475→    LiteGraph.node_types_by_file_extension = {};
+   476→    LiteGraph.Nodes = {};
+   477→    LiteGraph.searchbox_extras = {};
+   478→  }
+   479→
+   480→  /**
+   481→   * Reload nodes from a folder (used with external node definitions).
+   482→   * Scans for scripts and loads them to register new node types.
+   483→   */
+   484→  static reloadNodes(folder) {
+   485→    // In a module-based environment, this is typically a no-op
+   486→    // as node types are imported directly. Kept for API compatibility.
+   487→    if (LiteGraph.debug) {
+   488→      console.log("LiteGraph.reloadNodes: folder=" + folder);
+   489→    }
+   490→  }
+   491→
+   492→  /**
+   493→   * Adds a method to ALL node types (existing + future via LGraphNode.prototype).
+   494→   * Restored original backup behavior: keeps the old method as `"_" + name`
+   495→   * before overwriting.
+   496→   */
+   497→  static addNodeMethod(name, func) {
+   498→    const LGraphNode = LiteGraphClass._LGraphNode;
+   499→    if (LGraphNode) {
+   500→      LGraphNode.prototype[name] = func;
+   501→    }
+   502→    for (const i in LiteGraph.registered_node_types) {
+   503→      const type = LiteGraph.registered_node_types[i];
+   504→      if (type.prototype[name]) {
+   505→        // Keep old in case of replacing
+   506→        type.prototype["_" + name] = type.prototype[name];
+   507→      }
+   508→      type.prototype[name] = func;
+   509→    }
+   510→  }
+   511→
+   512→  /**
+   513→   * Factory: create a node instance by type string
+   514→   * Restored original signature `(type, title, options)` and the full set
+   515→   * of post-construction initialization (properties, flags, size, pos,
+   516→   * mode, options spread, onNodeCreated callback).
+   517→   */
+   518→  static createNode(type, title, options) {
+   519→    const baseClass = LiteGraph.registered_node_types[type];
+   520→    if (!baseClass) {
+   521→      if (LiteGraph.debug) {
+   522→        console.log(`LiteGraph: node type "${type}" not registered.`);
+   523→      }
+   524→      return null;
+   525→    }
+   526→    title = title || baseClass.title || type;
+   527→
+   528→    let node = null;
+   529→    if (LiteGraph.catch_exceptions) {
+   530→      try {
+   531→        node = new baseClass(title);
+   532→      } catch (err) {
+   533→        console.error(err);
+   534→        return null;
+   535→      }
+   536→    } else {
+   537→      node = new baseClass(title);
+   538→    }
+   539→
+   540→    node.type = type;
+   541→    if (!node.title && title) node.title = title;
+   542→    if (!node.properties) node.properties = {};
+   543→    if (!node.properties_info) node.properties_info = [];
+   544→    if (!node.flags) node.flags = {};
+   545→    if (!node.size) node.size = node.computeSize();
+   546→    if (!node.pos) node.pos = LiteGraph.DEFAULT_POSITION.concat();
+   547→    if (!node.mode) node.mode = LiteGraph.ALWAYS;
+   548→
+   549→    if (options) {
+   550→      for (const i in options) {
+   551→        node[i] = options[i];
+   552→      }
+   553→    }
+   554→
+   555→    if (LiteGraph.use_uuids) {
+   556→      node.id = uuidv4();
+   557→    }
+   558→
+   559→    if (node.onNodeCreated) {
+   560→      node.onNodeCreated();
+   561→    }
+   562→
+   563→    return node;
+   564→  }
+   565→
+   566→  /**
+   567→   * Get a registered node class by type
+   568→   */
+   569→  static getNodeType(type) {
+   570→    return LiteGraph.registered_node_types[type];
+   571→  }
+   572→
+   573→  /**
+   574→   * Get all node types in a category.
+   575→   * Restored original `filter` semantics: `filter` is a value compared
+   576→   * against each type's `.filter` property via `!=` (not a predicate).
+   577→   */
+   578→  static getNodeTypesInCategory(category, filter) {
+   579→    const r = [];
+   580→    for (const i in LiteGraph.registered_node_types) {
+   581→      const type = LiteGraph.registered_node_types[i];
+   582→      if (type.category == null) {
+   583→        if (category === "") r.push(type);
+   584→      } else if (category === type.category) {
+   585→        if (filter == null || type.filter == filter) r.push(type);
+   586→      }
+   587→    }
+   588→    if (LiteGraph.auto_sort_node_types) {
+   589→      r.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+   590→    }
+   591→    return r;
+   592→  }
+   593→
+   594→  /**
+   595→   * Get all node type categories.
+   596→   * Restored original behaviour: respects the per-type `skip_list` flag
+   597→   * and the value-equality `filter` parameter.
+   598→   */
+   599→  static getNodeTypesCategories(filter) {
+   600→    const categories = { "": 1 };
+   601→    for (const i in LiteGraph.registered_node_types) {
+   602→      const type = LiteGraph.registered_node_types[i];
+   603→      if (type.category && !type.skip_list) {
+   604→        if (type.filter != filter) continue;
+   605→        categories[type.category] = 1;
+   606→      }
+   607→    }
+   608→    const result = Object.keys(categories);
+   609→    if (LiteGraph.auto_sort_node_types) {
+   610→      result.sort();
+   611→    }
+   612→    return result;
+   613→  }
+   614→
+   615→  /**
+   616→   * Check if two slot types are compatible for connection.
+   617→   *
+   618→   * Delegates to SlotTypes.isValidConnection which supports:
+   619→   *   - Type hierarchy (int → number → * subtype relationships)
+   620→   *   - Wildcard matching (0, null, undefined, "", "*")
+   621→   *   - EVENT ↔ ACTION cross-matching
+   622→   *   - Comma-separated multi-type slots
+   623→   *   - Fallback to string comparison for unregistered types
+   624→   *
+   625→   * If SlotTypes is not yet loaded (circular dep guard), falls back to
+   626→   * the legacy string-comparison logic.
+   627→   */
+   628→  static isValidConnection(typeA, typeB) {
+   629→    // Try the new SlotTypes-based system first
+   630→    if (LiteGraph.SlotTypes) {
+   631→      return LiteGraph.SlotTypes.isValidConnection(typeA, typeB);
+   632→    }
+   633→    // Legacy fallback (mirrors original logic)
+   634→    if (typeA === "" || typeA === "*") typeA = 0;
+   635→    if (typeB === "" || typeB === "*") typeB = 0;
+   636→    if (
+   637→      typeA === 0 || typeA === null || typeA === undefined ||
+   638→      typeB === 0 || typeB === null || typeB === undefined
+   639→    ) {
+   640→      return true;
+   641→    }
+   642→    if (typeA === typeB) return true;
+   643→    const strA = String(typeA).toLowerCase();
+   644→    const strB = String(typeB).toLowerCase();
+   645→    if (strA === strB) return true;
+   646→    if (strA.indexOf(",") !== -1 || strB.indexOf(",") !== -1) {
+   647→      const listA = strA.split(",");
+   648→      const listB = strB.split(",");
+   649→      for (const a of listA) for (const b of listB) {
+   650→        if (a.trim() === b.trim()) return true;
+   651→      }
+   652→    }
+   653→    return false;
+   654→  }
+   655→
+   656→  /**
+   657→   * Register an extra entry in the search box.
+   658→   * Restored original: storage key is description.toLowerCase(),
+   659→   * field name is `desc` (not `description`).
+   660→   */
+   661→  static registerSearchboxExtra(node_type, description, data) {
+   662→    LiteGraph.searchbox_extras[description.toLowerCase()] = {
+   663→      type: node_type,
+   664→      desc: description,
+   665→      data: data,
+   666→    };
+   667→  }
+   668→
+   669→  /**
+   670→   * Wrapper to load files (from URL using fetch, or from File/Blob using FileReader).
+   671→   * Restored original (url, type, on_complete, on_error) signature with
+   672→   * full response-type support (text/arraybuffer/json/blob), proxy prefixing,
+   673→   * and FileReader branches for File/Blob inputs. Returns Promise (URL) or
+   674→   * FileReader (File/Blob).
+   675→   */
+   676→  static fetchFile(url, type, on_complete, on_error) {
+   677→    type = type || "text";
+   678→    if (!url) return null;
+   679→
+   680→    if (url.constructor === String) {
+   681→      // Apply proxy if configured (e.g. for CORS workarounds).
+   682→      if (url.substr(0, 4) === "http" && LiteGraph.proxy) {
+   683→        url = LiteGraph.proxy + url.substr(url.indexOf(":") + 3);
+   684→      }
+   685→      return fetch(url)
+   686→        .then(function (response) {
+   687→          if (!response.ok) throw new Error("File not found");
+   688→          if (type === "arraybuffer") return response.arrayBuffer();
+   689→          else if (type === "text" || type === "string") return response.text();
+   690→          else if (type === "json") return response.json();
+   691→          else if (type === "blob") return response.blob();
+   692→        })
+   693→        .then(function (data) {
+   694→          if (on_complete) on_complete(data);
+   695→        })
+   696→        .catch(function (error) {
+   697→          console.error("error fetching file:", url);
+   698→          if (on_error) on_error(error);
+   699→        });
+   700→    } else if (url.constructor === File || url.constructor === Blob) {
+   701→      const reader = new FileReader();
+   702→      reader.onload = function (e) {
+   703→        let v = e.target.result;
+   704→        if (type === "json") v = JSON.parse(v);
+   705→        if (on_complete) on_complete(v);
+   706→      };
+   707→      if (type === "arraybuffer") return reader.readAsArrayBuffer(url);
+   708→      else if (type === "text" || type === "json") return reader.readAsText(url);
+   709→      else if (type === "blob") return reader.readAsBinaryString(url);
+   710→      return reader;
+   711→    }
+   712→    return null;
+   713→  }
+   714→
+   715→  /**
+   716→   * Close all open context menus
+   717→   */
+   718→  static closeAllContextMenus(refWindow) {
+   719→    refWindow = refWindow || window;
+   720→    const elements = refWindow.document.querySelectorAll(".litecontextmenu");
+   721→    for (let i = 0; i < elements.length; i++) {
+   722→      if (elements[i].close) elements[i].close();
+   723→      else if (elements[i].parentNode) elements[i].parentNode.removeChild(elements[i]);
+   724→    }
+   725→    // Also close panels
+   726→    const panels = refWindow.document.querySelectorAll(".litepanel");
+   727→    for (let i = 0; i < panels.length; i++) {
+   728→      if (panels[i].close) panels[i].close();
+   729→      else if (panels[i].parentNode) panels[i].parentNode.removeChild(panels[i]);
+   730→    }
+   731→    const dialogs = refWindow.document.querySelectorAll(".litedialog");
+   732→    for (let i = 0; i < dialogs.length; i++) {
+   733→      if (dialogs[i].close) dialogs[i].close();
+   734→      else if (dialogs[i].parentNode) dialogs[i].parentNode.removeChild(dialogs[i]);
+   735→    }
+   736→  }
+   737→
+   738→  /**
+   739→   * Extend class (copy prototype properties)
+   740→   */
+   741→  static extendClass(target, origin) {
+   742→    // Copy own static properties from origin to target (skip ones target
+   743→    // already owns, mirroring the original `hasOwnProperty` guard).
+   744→    for (const i in origin) {
+   745→      if (target[i] === undefined) {
+   746→        target[i] = origin[i];
+   747→      }
+   748→    }
+   749→    // Copy prototype properties (including getters/setters) so subclassing
+   750→    // via `LiteGraph.extendClass(Sub, LGraphNode)` actually inherits methods.
+   751→    if (origin.prototype) {
+   752→      for (const i in origin.prototype) {
+   753→        if (!Object.prototype.hasOwnProperty.call(origin.prototype, i))
+   754→          continue;
+   755→        if (Object.prototype.hasOwnProperty.call(target.prototype, i))
+   756→          continue;
+   757→        const getter = origin.prototype.__lookupGetter__(i);
+   758→        const setter = origin.prototype.__lookupSetter__(i);
+   759→        if (getter) {
+   760→          target.prototype.__defineGetter__(i, getter);
+   761→        }
+   762→        if (setter) {
+   763→          target.prototype.__defineSetter__(i, setter);
+   764→        }
+   765→        if (!getter && !setter) {
+   766→          target.prototype[i] = origin.prototype[i];
+   767→        }
+   768→      }
+   769→    }
+   770→  }
+   771→
+   772→  // Internal reference to LGraphNode (set after class definition to avoid circular dependency)
+   773→  static _LGraphNode = null;
+   774→}
+   775→
+   776→// Export as LiteGraph for convenience (maintains API compatibility)
+   777→const LiteGraph = LiteGraphClass;
+   778→
+   779→export { LiteGraph, LiteGraphClass };
+   780→export default LiteGraph;
+   781→
