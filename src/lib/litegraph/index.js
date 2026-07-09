@@ -79,6 +79,7 @@ if (LiteGraph._pendingRegistrations) {
   for (const baseClass of LiteGraph._pendingRegistrations) {
     if (!(baseClass.prototype instanceof LGraphNode)) {
       for (const i in LGraphNode.prototype) {
+        if (i === "constructor") continue;
         if (baseClass.prototype[i] === undefined) {
           baseClass.prototype[i] = LGraphNode.prototype[i];
         }

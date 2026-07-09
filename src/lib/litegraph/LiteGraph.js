@@ -362,7 +362,9 @@ class LiteGraphClass {
     if (LGraphNode) {
       if (!(baseClass.prototype instanceof LGraphNode)) {
         // Fallback: mixin for backward compatibility
+        // Skip 'constructor' — copying it breaks the class's own constructor.
         for (const i in LGraphNode.prototype) {
+          if (i === "constructor") continue;
           if (baseClass.prototype[i] === undefined) {
             baseClass.prototype[i] = LGraphNode.prototype[i];
           }
@@ -699,9 +701,11 @@ class LiteGraphClass {
 
     // Ensure LGraphNode methods are mixed in for classes that don't
     // extend LGraphNode directly (vuestudio compat: nodeMeta etc.)
+    // Skip 'constructor' — copying it would break the class's own constructor.
     const LGraphNode = LiteGraphClass._LGraphNode;
     if (LGraphNode && !(baseClass.prototype instanceof LGraphNode)) {
       for (const i in LGraphNode.prototype) {
+        if (i === "constructor") continue;
         if (baseClass.prototype[i] === undefined) {
           baseClass.prototype[i] = LGraphNode.prototype[i];
         }
