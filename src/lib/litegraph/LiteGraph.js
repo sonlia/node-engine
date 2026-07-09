@@ -696,6 +696,18 @@ class LiteGraphClass {
       }
       return null;
     }
+
+    // Ensure LGraphNode methods are mixed in for classes that don't
+    // extend LGraphNode directly (vuestudio compat: nodeMeta etc.)
+    const LGraphNode = LiteGraphClass._LGraphNode;
+    if (LGraphNode && !(baseClass.prototype instanceof LGraphNode)) {
+      for (const i in LGraphNode.prototype) {
+        if (baseClass.prototype[i] === undefined) {
+          baseClass.prototype[i] = LGraphNode.prototype[i];
+        }
+      }
+    }
+
     title = title || baseClass.title || type;
 
     let node = null;
