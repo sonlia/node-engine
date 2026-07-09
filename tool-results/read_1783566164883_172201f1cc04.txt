@@ -1,0 +1,1413 @@
+     1→import { LiteGraph } from "@sonlia/node-engine";
+     2→
+     3→import _ from "lodash-es";
+     4→import { defineAsyncComponent, markRaw } from "vue";
+     5→import { uid as uuid } from "quasar";
+     6→import {
+     7→  migrateLegacyGridLayout,
+     8→  applyGridContainerStyleToProps,
+     9→} from "./webNode/layout/layoutControls/flexCodeGen.js";
+    10→import { categoryOfTreePath } from "./nodeScope.js";
+    11→
+    12→// node 的复函数
+    13→export class nodeMeta {
+    14→  constructor() {
+    15→    // 设置默认 mode 为 ALWAYS，确保 runStep 时会执行 onExecute
+    16→    this.mode = LiteGraph.ALWAYS;
+    17→
+    18→    // 约定三角形：事件。 方形：slot。  圆心：变量
+    19→    this.addInput("orderIn", "oderlink", {
+    20→      shape: LiteGraph.GRID_SHAPE,
+    21→      type: "orderSlot",
+    22→      hideOnSubgraphPanel: true,
+    23→    });
+    24→    this.addOutput("orderOut", "oderlink", {
+    25→      shape: LiteGraph.GRID_SHAPE,
+    26→      type: "orderSlot",
+    27→      hideOnSubgraphPanel: true,
+    28→    });
+    29→    this.importStr = undefined;
+    30→    this.tag = undefined;
+    31→    this.categories = undefined;
+    32→    this.treePath = "default";
+    33→    // 重写的 属性面板（使用 markRaw 避免 Vue 响应式警告）
+    34→    this.uiPanel = markRaw(defineAsyncComponent(() => undefined));
+    35→    this.jsCode = "";
+    36→    this.bgJsCode = "";
+    37→    this.parentMustBe = [];
+    38→    this.docs = undefined;
+    39→
+    40→    // ==================== 调试 probe 自动追加 ====================
+    41→    // 用 instance property 覆盖 prototype 方法,把"子类 onExecute 跑完后追加 probe"
+    42→    // 内聚到基类。任何继承 nodeMeta 的节点设 __debugMode 后,jsCode/bgJsCode 自动
+    43→    // 注入对应调试代码(trace / breakpoint / log)。
+    44→    //
+    45→    // 关键:super() 调用时子类 prototype.onExecute 通过原型链已可访问,
+    46→    // 这里 bind 后存起来,wrapper 调它即可。
+    47→    const _userOnExecute = this.onExecute ? this.onExecute.bind(this) : null;
+    48→    this.onExecute = () => {
+    49→      const result = _userOnExecute ? _userOnExecute() : undefined;
+    50→      this._appendDebugInjection();
+    51→      return result;
+    52→    };
+    53→  }
+    54→
+    55→  /**
+    56→   * 按 properties.__debugMode 在 jsCode / bgJsCode 注入调试代码。
+    57→   * 三种模式互斥单选:
+    58→   * - 'trace'      → __vsProbe(...) 上报 slot 值到设计器 SSE
+    59→   * - 'breakpoint' → debugger; 注入(UI 节点跳过,因 debugger 是 statement)
+    60→   * - 'log'        → console.log('[node:id.side:slot]', expr) 注入
+    61→   * - 'off' / 缺省 → 不注入
+    62→   *
+    63→   * 共享:
+    64→   * - input 端表达式: graph.links[input.link].data (上游 setOutputData 写的变量名)
+    65→   * - output 端表达式: outputs[i]._data (本节点写的变量名)
+    66→   * - isProbeable 过滤防 UUID 含 '-' 引发 JS 解析错
+    67→   *
+    68→   * 形态分类:
+    69→   * - UI 节点(this.categories === 'ui' || type 以 'ui/' 开头): jsCode 是表达式,
+    70→   *   trace / log 用逗号操作符内嵌;breakpoint 整体跳过(无法塞 statement)
+    71→   * - logic 节点: jsCode 是 statement,前后追加 probe statement
+    72→   *
+    73→   * 后端 helper(bgJsCode):trace 模式需要 inline globalThis.__vsProbe(用 fetch);
+    74→   *   breakpoint / log 模式直接用全局可用的 debugger / console.log,无需 helper。
+    75→   *
+    76→   * 幂等: 已含调试标记 (__vsProbe(、/* __vs_dbg *\/) 的代码不重复注入。
+    77→   */
+    78→  _appendDebugInjection() {
+    79→    const mode = this.properties?.__debugMode;
+    80→    if (!mode || mode === 'off') return;
+    81→
+    82→    const isProbeable = (expr) => {
+    83→      if (typeof expr !== 'string') return false;
+    84→      const trimmed = expr.trim();
+    85→      if (!trimmed) return false;
+    86→      if (!/^[A-Za-z_$]/.test(trimmed)) return false;
+    87→      if (trimmed.includes('-')) return false;
+    88→      return true;
+    89→    };
+    90→
+    91→    const slots = [];
+    92→    if (Array.isArray(this.inputs)) {
+    93→      for (const input of this.inputs) {
+    94→        if (!input?.name) continue;
+    95→        if (input.type === 'orderSlot') continue;
+    96→        const linkId = input.link;
+    97→        if (linkId == null) continue;
+    98→        const link = this.graph?.links?.[linkId];
+    99→        const varExpr = link?.data;
+   100→        if (!isProbeable(varExpr)) continue;
+   101→        slots.push({ side: 'in', slot: input.name, expr: varExpr });
+   102→      }
+   103→    }
+   104→    if (Array.isArray(this.outputs)) {
+   105→      for (const output of this.outputs) {
+   106→        if (!output?.name) continue;
+   107→        if (output.type === 'orderSlot') continue;
+   108→        const varName = output._data;
+   109→        if (!isProbeable(varName)) continue;
+   110→        slots.push({ side: 'out', slot: output.name, expr: varName });
+   111→      }
+   112→    }
+   113→
+   114→    const isUi = this.categories === 'ui' || (typeof this.type === 'string' && this.type.startsWith('ui/'));
+   115→
+   116→    if (mode === 'breakpoint') {
+   117→      // UI 节点 jsCode 是表达式,debugger 塞不进表达式,跳过前端注入;后端仍可注入
+   118→      if (!isUi && this.jsCode && typeof this.jsCode === 'string' && !this.jsCode.includes('/* __vs_dbg */')) {
+   119→        this.jsCode = `/* __vs_dbg */ debugger;\n${this.jsCode}`;
+   120→      }
+   121→      if (this.bgJsCode && typeof this.bgJsCode === 'string' && !this.bgJsCode.includes('/* __vs_dbg */')) {
+   122→        this.bgJsCode = `/* __vs_dbg */ debugger;\n${this.bgJsCode}`;
+   123→      }
+   124→      return;
+   125→    }
+   126→
+   127→    if (slots.length === 0) return;
+   128→
+   129→    const nodeIdLit = JSON.stringify(this.id);
+   130→    const inSlots = slots.filter(s => s.side === 'in');
+   131→    const outSlots = slots.filter(s => s.side === 'out');
+   132→
+   133→    if (mode === 'log') {
+   134→      // console.log 注入,前端后端通用
+   135→      const logExpr = (s) =>
+   136→        `console.log(${JSON.stringify(`[node:${this.id}.${s.side}:${s.slot}]`)}, ${s.expr})`;
+   137→
+   138→      if (this.jsCode && typeof this.jsCode === 'string' && !this.jsCode.includes('/* __vs_dbg */')) {
+   139→        if (isUi) {
+   140→          const all = slots.map(logExpr);
+   141→          this.jsCode = `/* __vs_dbg */ (${all.join(', ')}, ${this.jsCode})`;
+   142→        } else {
+   143→          const before = inSlots.map(s => `${logExpr(s)};`).join('\n');
+   144→          const after = outSlots.map(s => `${logExpr(s)};`).join('\n');
+   145→          this.jsCode = `/* __vs_dbg */\n${before ? before + '\n' : ''}${this.jsCode}${after ? '\n' + after : ''}`;
+   146→        }
+   147→      }
+   148→      // 路由 wrapper 形态(bgJsCode 是 fastify.xxx(...) 闭包)的节点跳过 bgJsCode 注入,
+   149→      // 否则前/后追加的 log 会落在闭包外, 引用闭包内变量(in0/out0)导致 ReferenceError.
+   150→      const isRouteWrapperBg = typeof this.bgJsCode === 'string' && this.bgJsCode.includes('fastify.');
+   151→      if (!isRouteWrapperBg && this.bgJsCode && typeof this.bgJsCode === 'string' && !this.bgJsCode.includes('/* __vs_dbg */')) {
+   152→        const before = inSlots.map(s => `${logExpr(s)};`).join('\n');
+   153→        const after = outSlots.map(s => `${logExpr(s)};`).join('\n');
+   154→        this.bgJsCode = `/* __vs_dbg */\n${before ? before + '\n' : ''}${this.bgJsCode}${after ? '\n' + after : ''}`;
+   155→      }
+   156→      return;
+   157→    }
+   158→
+   159→    if (mode === 'trace') {
+   160→      const inputProbes = inSlots.map(s => ({
+   161→        key: JSON.stringify(`${this.id}:in:${s.slot}`),
+   162→        slot: JSON.stringify(s.slot),
+   163→        expr: s.expr,
+   164→        side: 'in',
+   165→      }));
+   166→      const outputProbes = outSlots.map(s => ({
+   167→        key: JSON.stringify(`${this.id}:out:${s.slot}`),
+   168→        slot: JSON.stringify(s.slot),
+   169→        expr: s.expr,
+   170→        side: 'out',
+   171→      }));
+   172→
+   173→      if (this.jsCode && typeof this.jsCode === 'string' && !this.jsCode.includes('__vsProbe(')) {
+   174→        const feProbeExpr = (p) =>
+   175→          `__vsProbe(${p.key}, ${p.expr}, { nodeId: ${nodeIdLit}, slot: ${p.slot}, side: '${p.side}' })`;
+   176→
+   177→        if (isUi) {
+   178→          const allProbes = [...inputProbes, ...outputProbes].map(feProbeExpr);
+   179→          const guarded = allProbes.map(p => `(typeof __vsProbe === 'function' && ${p})`);
+   180→          this.jsCode = `(${guarded.join(', ')}, ${this.jsCode})`;
+   181→        } else {
+   182→          const before = inputProbes.map(p => `if (typeof __vsProbe === 'function') ${feProbeExpr(p)};`);
+   183→          const after = outputProbes.map(p => `if (typeof __vsProbe === 'function') ${feProbeExpr(p)};`);
+   184→          const beforeCode = before.length ? before.join('\n') + '\n' : '';
+   185→          const afterCode = after.length ? '\n' + after.join('\n') : '';
+   186→          this.jsCode = `${beforeCode}${this.jsCode}${afterCode}`;
+   187→        }
+   188→      }
+   189→
+   190→      if (this.bgJsCode && typeof this.bgJsCode === 'string' && !this.bgJsCode.includes('__vsProbe(')) {
+   191→        // 路由 wrapper 形态(bgJsCode 整体是 fastify.xxx(...) 闭包)跳过 trace 注入,
+   192→        // 否则前/后追加的 __vsProbe 会落在闭包外, 引用闭包内 in0/out0 等变量导致 ReferenceError,
+   193→        // fastify 启动阶段直接崩溃. 前端 jsCode 端的 trace 已覆盖这些 slot, 后端无需再注入.
+   194→        const isRouteWrapperBg = this.bgJsCode.includes('fastify.');
+   195→        if (!isRouteWrapperBg) {
+   196→          const helper = `if (typeof globalThis.__vsProbe !== 'function') { globalThis.__vsProbe = (k, v, m) => { try { fetch(\`\${process.env.VS_DESIGNER || 'http://localhost:3000'}/api/debug/value/\${process.env.VS_PROJECT_ID}\`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ probeKey: k, value: v, ...m, timestamp: Date.now() }) }).catch(()=>{}); } catch {} }; }`;
+   197→          const beProbeExpr = (p) =>
+   198→            `__vsProbe(${p.key}, ${p.expr}, { nodeId: ${nodeIdLit}, slot: ${p.slot}, side: '${p.side}' })`;
+   199→
+   200→          const before = inputProbes.map(p => `if (typeof __vsProbe === 'function') ${beProbeExpr(p)};`);
+   201→          const after = outputProbes.map(p => `if (typeof __vsProbe === 'function') ${beProbeExpr(p)};`);
+   202→          const beforeCode = (before.length || after.length) ? helper + '\n' + (before.length ? before.join('\n') + '\n' : '') : '';
+   203→          const afterCode = after.length ? '\n' + after.join('\n') : '';
+   204→          this.bgJsCode = `${beforeCode}${this.bgJsCode}${afterCode}`;
+   205→        }
+   206→      }
+   207→    }
+   208→  }
+   209→
+   210→  /**
+   211→   * litegraph 节点前景绘制:按 __debugMode 在节点右上角画 6×6 色块。
+   212→   * 由 litegraph 在每帧 redraw 时调用,基类一次实现,所有子类自动生效。
+   213→   */
+   214→  onDrawForeground(ctx) {
+   215→    const mode = this.properties?.__debugMode;
+   216→    if (!mode || mode === 'off') return;
+   217→    const color =
+   218→      mode === 'trace' ? '#ffb300' :
+   219→      mode === 'breakpoint' ? '#e53935' :
+   220→      mode === 'log' ? '#42a5f5' : null;
+   221→    if (!color) return;
+   222→    if (!this.size) return;
+   223→    const x = this.size[0] - 12;
+   224→    const y = -10;
+   225→    ctx.fillStyle = color;
+   226→    ctx.fillRect(x, y, 6, 6);
+   227→  }
+   228→
+   229→  // 工具方法：切换多个输出槽的 hideOnNode 状态
+   230→  toggleOutputSlotsHideOnNode(slotNames, isHidden) {
+   231→    slotNames.forEach((name) => {
+   232→      const index = this.outputs.findIndex((x) => x.name === name);
+   233→      if (index !== -1) {
+   234→        this.outputs[index].hideOnNode = isHidden;
+   235→      }
+   236→    });
+   237→  }
+   238→
+   239→  static get title() {
+   240→    return "Input";
+   241→  }
+   242→  static get name() {
+   243→    return this.title;
+   244→  }
+   245→  static get id() {
+   246→    return uuid();
+   247→  }
+   248→  static get treePath() {
+   249→    return "default"; // This defines the category path in the menu
+   250→  }
+   251→  static get parentMustBe() {
+   252→    return [];
+   253→  }
+   254→  // 所属/情境(显式静态,可被子类或 JSON 覆盖):默认按 treePath 顶段派生
+   255→  static get categories() {
+   256→    return categoryOfTreePath(this.treePath);
+   257→  }
+   258→}
+   259→
+   260→// 修改 Subgraph 类定义
+   261→export class Subgraph extends nodeMeta {
+   262→  constructor() {
+   263→    super();
+   264→
+   265→    this.output_node_type = "graph/output";
+   266→    //create inner graph
+   267→    this.subgraph = new LiteGraph.LGraph();
+   268→    this.subgraph._subgraph_node = this;
+   269→    this.subgraph._is_subgraph = true;
+   270→
+   271→    this.subgraph.onTrigger = this.onSubgraphTrigger.bind(this);
+   272→
+   273→    //nodes input node added inside
+   274→    this.subgraph.onInputAdded = this.onSubgraphNewInput.bind(this);
+   275→    this.subgraph.onInputRenamed = this.onSubgraphRenamedInput.bind(this);
+   276→    this.subgraph.onInputTypeChanged =
+   277→      this.onSubgraphTypeChangeInput.bind(this);
+   278→    this.subgraph.onInputRemoved = this.onSubgraphRemovedInput.bind(this);
+   279→
+   280→    this.subgraph.onOutputAdded = this.onSubgraphNewOutput.bind(this);
+   281→    this.subgraph.onOutputRenamed = this.onSubgraphRenamedOutput.bind(this);
+   282→    this.subgraph.onOutputTypeChanged =
+   283→      this.onSubgraphTypeChangeOutput.bind(this);
+   284→    this.subgraph.onOutputRemoved = this.onSubgraphRemovedOutput.bind(this);
+   285→    this.subgraph.onNodeAdded = this.onSubgraphStructureChanged.bind(this);
+   286→    this.subgraph.onNodeRemoved = this.onSubgraphStructureChanged.bind(this);
+   287→    this.subgraph.onConnectionChange =
+   288→      this.onSubgraphStructureChanged.bind(this);
+   289→  }
+   290→
+   291→  onDblClick(e, pos, graphcanvas) {
+   292→    var that = this;
+   293→    setTimeout(function () {
+   294→      graphcanvas.openSubgraph(that.subgraph);
+   295→    }, 10);
+   296→  }
+   297→
+   298→  onExecute() {
+   299→
+   300→    if (this.inputs) {
+   301→      for (var i = 0; i < this.inputs.length; i++) {
+   302→        var input = this.inputs[i];
+   303→        var value = this.getInputData(i);
+   304→        this.subgraph.setInputData(input.name, value);
+   305→      }
+   306→    }
+   307→
+   308→    this.subgraph.runStep();
+   309→
+   310→
+   311→    if (this.outputs) {
+   312→      for (var i = 0; i < this.outputs.length; i++) {
+   313→        var output = this.outputs[i];
+   314→        var value = this.subgraph.getOutputData(output.name);
+   315→
+   316→          this.setOutputData(i, value);
+   317→
+   318→      }
+   319→    }
+   320→  }
+   321→
+   322→  sendEventToAllNodes(eventname, param, mode) {
+   323→    this.subgraph.sendEventToAllNodes(eventname, param, mode);
+   324→  }
+   325→
+   326→  computeSize() {
+   327→    var num_inputs = this.inputs
+   328→      ? this.inputs.filter((slot) => !slot.hideOnNode).length
+   329→      : 0;
+   330→    var num_outputs = this.outputs
+   331→      ? this.outputs.filter((slot) => !slot.hideOnNode).length
+   332→      : 0;
+   333→    return [
+   334→      200,
+   335→      Math.max(num_inputs, num_outputs) * LiteGraph.NODE_SLOT_HEIGHT + 8,
+   336→    ];
+   337→  }
+   338→  onSubgraphTrigger(event, param) {
+   339→    var slot = this.findOutputSlot(event);
+   340→    if (slot != -1) {
+   341→      this.triggerSlot(slot);
+   342→    }
+   343→  }
+   344→
+   345→  onSubgraphStructureChanged() {
+   346→    this._dirty = true;
+   347→    this.graph?.setDirtyCanvas?.(true, true);
+   348→    this.graph?.onNodeConnectionChange?.(this);
+   349→  }
+   350→
+   351→  onSubgraphNewInput(name, type, options) {
+   352→    var slot = this.findInputSlot(name);
+   353→    if (slot == -1) {
+   354→      // 添加输入槽，如果 options.hideOnNode 为 true，则隐藏
+   355→      this.addInput(name, type, options || {});
+   356→    } else if (options && this.inputs && this.inputs[slot]) {
+   357→      Object.assign(this.inputs[slot], options);
+   358→    }
+   359→  }
+   360→
+   361→  onSubgraphRenamedInput(oldname, name) {
+   362→    var slot = this.findInputSlot(oldname);
+   363→    if (slot == -1) {
+   364→      return;
+   365→    }
+   366→    var info = this.getInputInfo(slot);
+   367→    info.name = name;
+   368→  }
+   369→
+   370→  onSubgraphTypeChangeInput(name, type) {
+   371→    var slot = this.findInputSlot(name);
+   372→    if (slot == -1) {
+   373→      return;
+   374→    }
+   375→    var info = this.getInputInfo(slot);
+   376→    info.type = type;
+   377→  }
+   378→
+   379→  onSubgraphRemovedInput(name) {
+   380→    var slot = this.findInputSlot(name);
+   381→    if (slot == -1) {
+   382→      return;
+   383→    }
+   384→    this.removeInput(slot);
+   385→  }
+   386→
+   387→  onSubgraphNewOutput(name, type, options) {
+   388→    var slot = this.findOutputSlot(name);
+   389→    if (slot == -1) {
+   390→      this.addOutput(name, type, options || {});
+   391→    } else if (options && this.outputs && this.outputs[slot]) {
+   392→      Object.assign(this.outputs[slot], options);
+   393→    }
+   394→  }
+   395→
+   396→  onSubgraphRenamedOutput(oldname, name) {
+   397→    var slot = this.findOutputSlot(oldname);
+   398→    if (slot == -1) {
+   399→      return;
+   400→    }
+   401→    var info = this.getOutputInfo(slot);
+   402→    info.name = name;
+   403→  }
+   404→
+   405→  onSubgraphTypeChangeOutput(name, type) {
+   406→    var slot = this.findOutputSlot(name);
+   407→    if (slot == -1) {
+   408→      return;
+   409→    }
+   410→    var info = this.getOutputInfo(slot);
+   411→    info.type = type;
+   412→  }
+   413→
+   414→  onSubgraphRemovedOutput(name) {
+   415→    var slot = this.findOutputSlot(name);
+   416→    if (slot == -1) {
+   417→      return;
+   418→    }
+   419→    this.removeOutput(slot);
+   420→  }
+   421→  serialize() {
+   422→    var data = LiteGraph.LGraphNode.prototype.serialize.call(this);
+   423→    data.subgraph = this.subgraph.serialize();
+   424→    return data;
+   425→  }
+   426→  reassignSubgraphUUIDs(graph) {
+   427→    const idMap = { nodeIDs: {}, linkIDs: {} };
+   428→
+   429→    for (const node of graph.nodes) {
+   430→      const oldID = node.id;
+   431→      const newID = LiteGraph.uuidv4();
+   432→      node.id = newID;
+   433→
+   434→      if (idMap.nodeIDs[oldID] || idMap.nodeIDs[newID]) {
+   435→        throw new Error(
+   436→          `New/old node UUID wasn't unique in changed map! ${oldID} ${newID}`,
+   437→        );
+   438→      }
+   439→
+   440→      idMap.nodeIDs[oldID] = newID;
+   441→      idMap.nodeIDs[newID] = oldID;
+   442→    }
+   443→
+   444→    for (const link of graph.links) {
+   445→      const oldID = link[0];
+   446→      const newID = LiteGraph.uuidv4();
+   447→      link[0] = newID;
+   448→
+   449→      if (idMap.linkIDs[oldID] || idMap.linkIDs[newID]) {
+   450→        throw new Error(
+   451→          `New/old link UUID wasn't unique in changed map! ${oldID} ${newID}`,
+   452→        );
+   453→      }
+   454→
+   455→      idMap.linkIDs[oldID] = newID;
+   456→      idMap.linkIDs[newID] = oldID;
+   457→
+   458→      const nodeFrom = link[1];
+   459→      const nodeTo = link[3];
+   460→
+   461→      if (!idMap.nodeIDs[nodeFrom]) {
+   462→        throw new Error(`Old node UUID not found in mapping! ${nodeFrom}`);
+   463→      }
+   464→
+   465→      link[1] = idMap.nodeIDs[nodeFrom];
+   466→
+   467→      if (!idMap.nodeIDs[nodeTo]) {
+   468→        throw new Error(`Old node UUID not found in mapping! ${nodeTo}`);
+   469→      }
+   470→
+   471→      link[3] = idMap.nodeIDs[nodeTo];
+   472→    }
+   473→
+   474→    // Reconnect links
+   475→    for (const node of graph.nodes) {
+   476→      if (node.inputs) {
+   477→        for (const input of node.inputs) {
+   478→          if (input.link) {
+   479→            input.link = idMap.linkIDs[input.link];
+   480→          }
+   481→        }
+   482→      }
+   483→      if (node.outputs) {
+   484→        for (const output of node.outputs) {
+   485→          if (output.links) {
+   486→            output.links = output.links.map((l) => idMap.linkIDs[l]);
+   487→          }
+   488→        }
+   489→      }
+   490→    }
+   491→
+   492→    // Recurse!
+   493→    for (const node of graph.nodes) {
+   494→      if (node.type === "graph/subgraph") {
+   495→        const merge = reassignGraphUUIDs(node.subgraph);
+   496→        idMap.nodeIDs.assign(merge.nodeIDs);
+   497→        idMap.linkIDs.assign(merge.linkIDs);
+   498→      }
+   499→    }
+   500→  }
+   501→
+   502→  clone() {
+   503→    var node = LiteGraph.createNode(this.type);
+   504→    var data = this.serialize();
+   505→
+   506→    if (LiteGraph.use_uuids) {
+   507→      // LGraph.serialize() seems to reuse objects in the original graph. But we
+   508→      // need to change node IDs here, so clone it first.
+   509→      const subgraph = LiteGraph.cloneObject(data.subgraph);
+   510→
+   511→      this.reassignSubgraphUUIDs(subgraph);
+   512→
+   513→      data.subgraph = subgraph;
+   514→    }
+   515→
+   516→    delete data["id"];
+   517→    delete data["inputs"];
+   518→    delete data["outputs"];
+   519→    node.configure(data);
+   520→    return node;
+   521→  }
+   522→
+   523→  static get title() {
+   524→    return "Subgraph";
+   525→  }
+   526→  static get desc() {
+   527→    return "Graph inside a node";
+   528→  }
+   529→  static get title_color() {
+   530→    return "#339";
+   531→  }
+   532→  static get treePath() {
+   533→    return "graph";
+   534→  }
+   535→  static get id() {
+   536→    return "cf23d05b-0320-48fd-92d9-4a1c4d6a5cd1";
+   537→  }
+   538→}
+   539→
+   540→// 修改 uiNodeMeta 类定义
+   541→export class uiNodeMeta extends nodeMeta {
+   542→  constructor() {
+   543→    super(); // 调用父类构造函数
+   544→
+   545→    this.bgcolor = "#533";
+   546→    this.color = "#322";
+   547→    this.categories = "ui";
+   548→    this.addOutput("Ref", "string", {
+   549→      shape: LiteGraph.CARD_SHAPE,
+   550→      arguments: "",
+   551→    });
+   552→    // 删除默认的 show input slot，改为通过增强面板配置
+   553→    // this.addInput("show", "string");
+   554→    // UI节点使用默认的标签面板系统（使用 markRaw 避免 Vue 响应式警告）
+   555→    this.uiPanel = markRaw(
+   556→      defineAsyncComponent(
+   557→        () => import("../propertyPanel/DefaultNodePanel.vue"),
+   558→      ),
+   559→    );
+   560→    this.categories = "ui";
+   561→    // 添加节点基本属性
+   562→    this.tag = undefined;
+   563→    this.nodeRawData = {
+   564→      uiPanel: undefined,
+   565→      treePath: undefined,
+   566→      tag: undefined,
+   567→      importStr: undefined,
+   568→      meta: {},
+   569→
+   570→      slots: {},
+   571→      events: {},
+   572→      props: {},
+   573→      methods: {},
+   574→      computedProps: {},
+   575→    };
+   576→    // 初始化基础结构（保持空结构，等待 createDynamicClass 填充）
+   577→    this.properties = {
+   578→      props: {},
+   579→      styleClass: {},
+   580→      events: {},
+   581→      slots: {},
+   582→      methods: {},
+   583→      computedProps: {},
+   584→      style: "",
+   585→      wrappers: {
+   586→        // v-if 和 v-show（互斥）
+   587→        vIf: {
+   588→          enabled: false,
+   589→          condition: { value: "", isSlot: false },
+   590→        },
+   591→        vShow: {
+   592→          enabled: false,
+   593→          condition: { value: "", isSlot: false },
+   594→        },
+   595→        // Teleport
+   596→        teleport: {
+   597→          enabled: false,
+   598→          to: '"body"',
+   599→          disabled: false,
+   600→          defer: false,
+   601→        },
+   602→        // KeepAlive
+   603→        keepAlive: {
+   604→          enabled: false,
+   605→          include: "",
+   606→          exclude: "",
+   607→          max: null,
+   608→        },
+   609→        // Suspense
+   610→        suspense: {
+   611→          enabled: false,
+   612→          timeout: undefined,
+   613→          suspensible: false,
+   614→          slots: {
+   615→            default: "",
+   616→            fallback: "",
+   617→          },
+   618→          events: {
+   619→            onResolve: "",
+   620→            onPending: "",
+   621→            onFallback: "",
+   622→          },
+   623→        },
+   624→        // Transition
+   625→        transition: {
+   626→          enabled: false,
+   627→          name: '"fade"',
+   628→          mode: "",
+   629→          appear: false,
+   630→          css: true,
+   631→          type: '"transition"',
+   632→          duration: "",
+   633→          enterFromClass: "",
+   634→          enterActiveClass: "",
+   635→          enterToClass: "",
+   636→          leaveFromClass: "",
+   637→          leaveActiveClass: "",
+   638→          leaveToClass: "",
+   639→          appearClass: "",
+   640→          appearActiveClass: "",
+   641→          appearToClass: "",
+   642→          events: {
+   643→            onBeforeEnter: { value: "", isSlot: false },
+   644→            onEnter: { value: "", isSlot: false },
+   645→            onAfterEnter: { value: "", isSlot: false },
+   646→            onEnterCancelled: { value: "", isSlot: false },
+   647→            onBeforeLeave: { value: "", isSlot: false },
+   648→            onLeave: { value: "", isSlot: false },
+   649→            onAfterLeave: { value: "", isSlot: false },
+   650→            onLeaveCancelled: { value: "", isSlot: false },
+   651→            onBeforeAppear: { value: "", isSlot: false },
+   652→            onAppear: { value: "", isSlot: false },
+   653→            onAfterAppear: { value: "", isSlot: false },
+   654→            onAppearCancelled: { value: "", isSlot: false },
+   655→          },
+   656→        },
+   657→        // TransitionGroup
+   658→        transitionGroup: {
+   659→          enabled: false,
+   660→          name: '"list"',
+   661→          tag: '"div"',
+   662→          appear: false,
+   663→          css: true,
+   664→          type: '"transition"',
+   665→          duration: "",
+   666→          moveClass: "",
+   667→          enterFromClass: "",
+   668→          enterActiveClass: "",
+   669→          enterToClass: "",
+   670→          leaveFromClass: "",
+   671→          leaveActiveClass: "",
+   672→          leaveToClass: "",
+   673→          appearClass: "",
+   674→          appearActiveClass: "",
+   675→          appearToClass: "",
+   676→          events: {
+   677→            onBeforeEnter: { value: "", isSlot: false },
+   678→            onEnter: { value: "", isSlot: false },
+   679→            onAfterEnter: { value: "", isSlot: false },
+   680→            onEnterCancelled: { value: "", isSlot: false },
+   681→            onBeforeLeave: { value: "", isSlot: false },
+   682→            onLeave: { value: "", isSlot: false },
+   683→            onAfterLeave: { value: "", isSlot: false },
+   684→            onLeaveCancelled: { value: "", isSlot: false },
+   685→            onBeforeAppear: { value: "", isSlot: false },
+   686→            onAppear: { value: "", isSlot: false },
+   687→            onAfterAppear: { value: "", isSlot: false },
+   688→            onAppearCancelled: { value: "", isSlot: false },
+   689→          },
+   690→        },
+   691→        // Component（动态组件）
+   692→        component: {
+   693→          enabled: false,
+   694→          is: "",
+   695→        },
+   696→      },
+   697→      enhance: {
+   698→        permissionConfig: null, // 权限配置
+   699→      },
+   700→    };
+   701→  }
+   702→
+   703→  /**
+   704→   * 生成 UI 节点的 VNode 代码字符串
+   705→   *
+   706→
+   707→   * 占位符说明：
+   708→   * - __NODE_PROPS_{nodeId}__ : 节点自身 props（最终会与 visualStyle 合并）
+   709→   * - __CHILDREN_{nodeId}__  : 子节点 VNode（由 dragEditor schema 决定）
+   710→   * - __FUNC_{id}_{name}__   : FunctionBlock 的函数代码
+   711→   *
+   712→   * @returns {string} h() 函数调用代码
+   713→   */
+   714→  genCode() {
+   715→    const copyP = this.properties;
+   716→    const tag = this.tag || "div";
+   717→    const nodeId = this.id;
+   718→
+   719→    // 老 GridLayout 节点数据迁移(meta.layoutType==='grid' → properties.gridConfig)
+   720→    migrateLegacyGridLayout(copyP, this.nodeRawData);
+   721→
+   722→    // 设置 Ref 输出数据
+   723→    this.setOutputData(this.findOutputSlot("Ref"), nodeId);
+   724→
+   725→    // 辅助函数：格式化对象 key（包含特殊字符时用引号包裹）
+   726→    const safeKey = (name) => {
+   727→      if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)) {
+   728→        return `'${name}'`;
+   729→      }
+   730→      return name;
+   731→    };
+   732→    const stringifyLiteralProp = (value) =>
+   733→      JSON.stringify(String(value)).replace(/<\/script/gi, "<\\/script");
+   734→
+   735→    // 收集 props（节点自身的属性配置）
+   736→    const propsEntries = [];
+   737→
+   738→    if (copyP && Object.keys(copyP).length > 0) {
+   739→      // 处理 props
+   740→      if (copyP.props) {
+   741→        for (const propName in copyP.props) {
+   742→          const propConfig = copyP.props[propName];
+   743→          if (propConfig.isSlot === true) {
+   744→            if (this.findInputSlot(propName) === -1) {
+   745→              this.addInput(propName, "string");
+   746→            }
+   747→            const inputSlotIndex = this.findInputSlot(propName);
+   748→            if (inputSlotIndex !== -1) {
+   749→              const slotValue = this.getInputData(inputSlotIndex);
+   750→              if (
+   751→                slotValue !== undefined &&
+   752→                slotValue !== null &&
+   753→                slotValue !== ""
+   754→              ) {
+   755→                propsEntries.push(`${safeKey(propName)}: ${slotValue}`);
+   756→              }
+   757→            }
+   758→          } else if (!propConfig.disable) {
+   759→            // 优先使用 value（面板设置的值），回退到 data（兼容旧数据）
+   760→            let propValue;
+   761→            if (propConfig.value !== undefined && propConfig.value !== "") {
+   762→              propValue = propConfig.value;
+   763→            } else if (
+   764→              propConfig.data !== undefined &&
+   765→              propConfig.data !== ""
+   766→            ) {
+   767→              propValue = propConfig.data;
+   768→            }
+   769→
+   770→            if (propValue !== undefined && propValue !== "") {
+   771→              if (propConfig.literalString === true) {
+   772→                propsEntries.push(
+   773→                  `${safeKey(propName)}: ${stringifyLiteralProp(propValue)}`,
+   774→                );
+   775→              } else {
+   776→                propsEntries.push(`${safeKey(propName)}: ${propValue}`);
+   777→              }
+   778→            }
+   779→          }
+   780→        }
+   781→      }
+   782→
+   783→      // 处理 styleClass
+   784→      if (copyP.styleClass) {
+   785→        const styleCls = new Set();
+   786→        for (const key in copyP.styleClass) {
+   787→          const val = copyP.styleClass[key];
+   788→          if (Array.isArray(val)) {
+   789→            val.forEach((c) => styleCls.add(c));
+   790→          } else if (val !== null && val !== undefined && val !== "") {
+   791→            styleCls.add(val);
+   792→          }
+   793→        }
+   794→        const classString = Array.from(styleCls).join(" ");
+   795→        if (classString.trim()) {
+   796→          propsEntries.push(`class: "${classString}"`);
+   797→        }
+   798→      }
+   799→
+   800→      // 处理自定义 CSS 样式
+   801→      if (
+   802→        copyP.style &&
+   803→        typeof copyP.style === "string" &&
+   804→        copyP.style.trim()
+   805→      ) {
+   806→        propsEntries.push(`style: "${copyP.style}"`);
+   807→      }
+   808→
+   809→      // 处理编辑器专用样式（只在编辑模式生效）
+   810→      if (copyP?.enhance?.editorConfig) {
+   811→        const ec = copyP.enhance.editorConfig;
+   812→        const styleArr = [];
+   813→        if (ec.width?.value && ec.width?.enabled !== false) {
+   814→          styleArr.push(`width: ${ec.width.value}`);
+   815→        }
+   816→        if (ec.height?.value && ec.height?.enabled !== false) {
+   817→          styleArr.push(`height: ${ec.height.value}`);
+   818→        }
+   819→        if (styleArr.length > 0) {
+   820→          propsEntries.push(`__editorStyle: "${styleArr.join("; ")}"`);
+   821→        }
+   822→      }
+   823→
+   824→      // 传递编辑器行为配置到预览运行时
+   825→      if (this.nodeRawData?.meta?.editorBehavior) {
+   826→        propsEntries.push(
+   827→          `__editorBehavior: ${JSON.stringify(this.nodeRawData.meta.editorBehavior)}`,
+   828→        );
+   829→      }
+   830→
+   831→      if (this.nodeRawData?.meta?.editorPreview) {
+   832→        propsEntries.push(
+   833→          `__editorPreview: ${JSON.stringify(this.nodeRawData.meta.editorPreview)}`,
+   834→        );
+   835→      }
+   836→
+   837→      propsEntries.push(
+   838→        `__editorLabel: ${JSON.stringify(this.nodeRawData?.name || this.tag || this.title || "")}`,
+   839→      );
+   840→
+   841→      if (copyP?.enhance?.isLayoutPart) {
+   842→        propsEntries.push(`__layoutPart: true`);
+   843→      }
+   844→
+   845→      // grid 容器 CSS + __gridLayout/__gridConfig 元数据(委托给 layout 模块,
+   846→      // 服务任意带 gridConfig 的 UI 节点 — Layout 节点 grid 模式也会用到这里产出的元数据)
+   847→      applyGridContainerStyleToProps(propsEntries, copyP);
+   848→
+   849→      // 处理事件 - 只有连接了 FunctionBlock 才生成 __FUNC__ 占位符
+   850→      if (copyP.events) {
+   851→        for (const eventName in copyP.events) {
+   852→          const slotName = "E#" + eventName;
+   853→          if (copyP.events[eventName] === true) {
+   854→            if (this.findInputSlot(slotName) === -1) {
+   855→              const eventParams =
+   856→                this.nodeRawData.events?.[eventName]?.params || {};
+   857→              const paramNames = Object.keys(eventParams);
+   858→              this.addInput(slotName, "function", {
+   859→                shape: 5,
+   860→                meta: { args: paramNames },
+   861→              });
+   862→            }
+   863→
+   864→            const inputSlotIndex = this.findInputSlot(slotName);
+   865→            let functionBlockId = null;
+   866→            if (
+   867→              inputSlotIndex !== -1 &&
+   868→              this.inputs[inputSlotIndex].link &&
+   869→              this.graph
+   870→            ) {
+   871→              const linkInfo =
+   872→                this.graph.links[this.inputs[inputSlotIndex].link];
+   873→              if (linkInfo) {
+   874→                const sourceNode = this.graph._nodes_by_id[linkInfo.origin_id];
+   875→                if (
+   876→                  sourceNode &&
+   877→                  (sourceNode.type === "FunctionBlock" ||
+   878→                    sourceNode.constructor.name === "FunctionBlock")
+   879→                ) {
+   880→                  functionBlockId = sourceNode.id;
+   881→                }
+   882→              }
+   883→            }
+   884→
+   885→            // 只有连接了 FunctionBlock 才生成事件处理代码
+   886→            if (functionBlockId) {
+   887→              const eventHandlerName =
+   888→                "on" +
+   889→                eventName
+   890→                  .split(/[-]/)
+   891→                  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+   892→                  .join("");
+   893→
+   894→              propsEntries.push(
+   895→                `${eventHandlerName}: __FUNC_${functionBlockId}__`,
+   896→              );
+   897→            }
+   898→          }
+   899→        }
+   900→      }
+   901→    }
+   902→
+   903→    // 收集 slots (children) - 只收集连接了 FunctionBlock 的 slot
+   904→    // 使用 Map 存储 slotName -> functionBlockId 的映射
+   905→    const slotToFuncMap = new Map();
+   906→    if (copyP?.slots) {
+   907→      for (const slotName in copyP.slots) {
+   908→        const inputSlotName = `S#${slotName}`;
+   909→        if (copyP.slots[slotName] === true) {
+   910→          const slotScope = this.nodeRawData.slots?.[slotName]?.scope || {};
+   911→          const scopeParams = Object.keys(slotScope);
+   912→
+   913→          if (this.findInputSlot(inputSlotName) === -1) {
+   914→            this.addInput(inputSlotName, "function", {
+   915→              shape: 5,
+   916→              meta: { args: scopeParams },
+   917→              slotName: slotName,
+   918→            });
+   919→          }
+   920→
+   921→          const inputSlotIndex = this.findInputSlot(inputSlotName);
+   922→          let functionBlockId = null;
+   923→          if (
+   924→            inputSlotIndex !== -1 &&
+   925→            this.inputs[inputSlotIndex].link &&
+   926→            this.graph
+   927→          ) {
+   928→            const linkInfo = this.graph.links[this.inputs[inputSlotIndex].link];
+   929→            if (linkInfo) {
+   930→              const sourceNode = this.graph._nodes_by_id[linkInfo.origin_id];
+   931→              if (
+   932→                sourceNode &&
+   933→                (sourceNode.type === "FunctionBlock" ||
+   934→                  sourceNode.constructor.name === "FunctionBlock")
+   935→              ) {
+   936→                functionBlockId = sourceNode.id;
+   937→              }
+   938→            }
+   939→          }
+   940→
+   941→          // 只有连接了 FunctionBlock 才记录映射
+   942→          if (functionBlockId) {
+   943→            slotToFuncMap.set(slotName, functionBlockId);
+   944→          }
+   945→        }
+   946→      }
+   947→    }
+   948→
+   949→    const nodePropsStr =
+   950→      propsEntries.length > 0 ? `{ ${propsEntries.join(", ")} }` : "{}";
+   951→
+   952→    // Layout 节点专用 VNode(由 LayoutNodeMeta 子类实现 _buildLayoutVnode hook;
+   953→    // 普通 UI 节点本钩子不存在,layoutVnodeCode 为 undefined,走标准 createNode 路径)
+   954→    const layoutVnodeCode = this._buildLayoutVnode?.(propsEntries, nodeId, tag, copyP);
+   955→
+   956→    // children 占位符：为每个 slot 生成独立占位符 __CHILDREN_id_slotName__
+   957→    // FunctionBlock 连接的 slot 使用 __FUNC__，否则使用 dragEditor children 占位符
+   958→    const definedSlots = this.nodeRawData?.slots || {};
+   959→    const allSlotNames = Object.keys(definedSlots);
+   960→
+   961→    let childrenStr;
+   962→    if (allSlotNames.length === 0) {
+   963→      // 组件没有定义 slots（自闭合组件）
+   964→      childrenStr = "null";
+   965→    } else if (copyP.gridConfig) {
+   966→      // Grid 模式协议:children 必须是数组形式,assembler 会按 __gridLayout 重新包裹定位 div
+   967→      childrenStr = `__CHILDREN_${nodeId}_default__`;
+   968→    } else {
+   969→      // 为每个 slot 生成代码
+   970→      const allSlotsCode = allSlotNames.map((slotName) => {
+   971→        const formattedKey = safeKey(slotName);
+   972→        if (slotToFuncMap.has(slotName)) {
+   973→          // 使用 FunctionBlock 连接的代码
+   974→          const funcId = slotToFuncMap.get(slotName);
+   975→          return `${formattedKey}: __FUNC_${funcId}__`;
+   976→        }
+   977→        // 使用 dragEditor children 占位符
+   978→        return `${formattedKey}: () => __CHILDREN_${nodeId}_${slotName}__`;
+   979→      });
+   980→      childrenStr = `{ ${allSlotsCode.join(", ")} }`;
+   981→    }
+   982→
+   983→    // tag 不加引号，作为组件引用（如 QBtn），而不是字符串
+   984→    let vnodeCode = layoutVnodeCode
+   985→      ? layoutVnodeCode
+   986→      : `createNode(${tag}, "${nodeId}", ${nodePropsStr}, ${childrenStr})`;
+   987→
+   988→    // 结构包裹（如 RouterView 自动包裹 QPage）
+   989→    const wrapperTag = this.nodeRawData?.meta?.wrapperTag;
+   990→    if (wrapperTag) {
+   991→      vnodeCode = `h(${wrapperTag}, {}, { default: () => [${vnodeCode}] })`;
+   992→    }
+   993→
+   994→    // 处理条件渲染和包装组件
+   995→    // 顺序：vShow -> Transition -> KeepAlive -> Teleport -> vIf（最外层）
+   996→    if (copyP?.wrappers) {
+   997→      // vShow（指令，直接作用于元素）
+   998→      if (copyP.wrappers.vShow?.enabled) {
+   999→        const condition = copyP.wrappers.vShow.condition;
+  1000→        let conditionExpr = "true";
+  1001→        if (condition?.isSlot) {
+  1002→          const slotNameV = `V#vShow`;
+  1003→          const inputSlotIndexV = this.findInputSlot(slotNameV);
+  1004→          if (inputSlotIndexV !== -1) {
+  1005→            const slotValue = this.getInputData(inputSlotIndexV);
+  1006→            if (slotValue) conditionExpr = slotValue;
+  1007→          }
+  1008→        } else if (condition?.value) {
+  1009→          conditionExpr = condition.value;
+  1010→        }
+  1011→        vnodeCode = `withDirectives(${vnodeCode}, [[vShow, ${conditionExpr}]])`;
+  1012→      }
+  1013→
+  1014→      // Transition
+  1015→      if (copyP.wrappers.transition?.enabled) {
+  1016→        const transProps = copyP.wrappers.transition;
+  1017→        const transPropsArr = [];
+  1018→        if (transProps.name) transPropsArr.push(`name: ${transProps.name}`);
+  1019→        if (transProps.mode) transPropsArr.push(`mode: "${transProps.mode}"`);
+  1020→        if (transProps.appear) transPropsArr.push(`appear: true`);
+  1021→        const transPropsStr =
+  1022→          transPropsArr.length > 0 ? `{ ${transPropsArr.join(", ")} }` : "{}";
+  1023→        vnodeCode = `h(Transition, ${transPropsStr}, () => ${vnodeCode})`;
+  1024→      }
+  1025→
+  1026→      // KeepAlive
+  1027→      if (copyP.wrappers.keepAlive?.enabled) {
+  1028→        const kaProps = copyP.wrappers.keepAlive;
+  1029→        const kaPropsArr = [];
+  1030→        if (kaProps.include) kaPropsArr.push(`include: ${kaProps.include}`);
+  1031→        if (kaProps.exclude) kaPropsArr.push(`exclude: ${kaProps.exclude}`);
+  1032→        if (kaProps.max) kaPropsArr.push(`max: ${kaProps.max}`);
+  1033→        const kaPropsStr =
+  1034→          kaPropsArr.length > 0 ? `{ ${kaPropsArr.join(", ")} }` : "{}";
+  1035→        vnodeCode = `h(KeepAlive, ${kaPropsStr}, () => ${vnodeCode})`;
+  1036→      }
+  1037→
+  1038→      // Teleport
+  1039→      if (copyP.wrappers.teleport?.enabled) {
+  1040→        const tpProps = copyP.wrappers.teleport;
+  1041→        const tpPropsArr = [`to: ${tpProps.to || '"body"'}`];
+  1042→        if (tpProps.disabled) tpPropsArr.push(`disabled: true`);
+  1043→        const tpPropsStr = `{ ${tpPropsArr.join(", ")} }`;
+  1044→        vnodeCode = `h(Teleport, ${tpPropsStr}, ${vnodeCode})`;
+  1045→      }
+  1046→
+  1047→      // vIf（最外层，包裹所有内容）
+  1048→      if (copyP.wrappers.vIf?.enabled) {
+  1049→        const condition = copyP.wrappers.vIf.condition;
+  1050→        let conditionExpr = "true";
+  1051→        if (condition?.isSlot) {
+  1052→          const slotNameV = `V#vIf`;
+  1053→          const inputSlotIndexV = this.findInputSlot(slotNameV);
+  1054→          if (inputSlotIndexV !== -1) {
+  1055→            const slotValue = this.getInputData(inputSlotIndexV);
+  1056→            if (slotValue) conditionExpr = slotValue;
+  1057→          }
+  1058→        } else if (condition?.value) {
+  1059→          conditionExpr = condition.value;
+  1060→        }
+  1061→        vnodeCode = `${conditionExpr} ? ${vnodeCode} : null`;
+  1062→      }
+  1063→    }
+  1064→
+  1065→    return vnodeCode;
+  1066→  }
+  1067→
+  1068→  onExecute() {
+  1069→    this.jsCode = this.genCode();
+  1070→  }
+  1071→}
+  1072→
+  1073→class GraphInput extends nodeMeta {
+  1074→  constructor() {
+  1075→    super();
+  1076→    this.outputs.length = 0;
+  1077→    this.inputs.length = 0;
+  1078→    this.addOutput("", "string");
+  1079→    this.properties = { slotId: "" };
+  1080→  }
+  1081→
+  1082→  onConnectionsChange() {
+  1083→    this.onExecute();
+  1084→  }
+  1085→
+  1086→  onExecute() {
+  1087→    const slotId = this.properties.slotId;
+  1088→    if (!this.graph || !slotId) return;
+  1089→
+  1090→    // 获取父节点（FunctionBlock/Subgraph）
+  1091→    const parentNode = this.graph._subgraph_node;
+  1092→    if (!parentNode) return;
+  1093→
+  1094→    // 根据 slotId 找到父节点对应的 input slot
+  1095→    const slotIndex = parentNode.inputs.findIndex((slot) => slot.id === slotId);
+  1096→    if (slotIndex === -1) return;
+  1097→
+  1098→    const outputName = parentNode.inputs[slotIndex].name;
+  1099→    this.outputs[0].name = outputName;
+  1100→
+  1101→    // 父节点 getInputData 已被 nodeMeta wrapper 按 slot.valueMode 分发:
+  1102→    //   - label / placeholder → 返回 slot.name / placeholderTemplate
+  1103→    //   - 默认               → 返回 wire 真值
+  1104→    // 这里只需要再处理"value 模式 + 未连 wire"的 fallback(取 slot.name 作变量名)
+  1105→    let value = parentNode.getInputData(slotIndex, true);
+  1106→    if (value === undefined || value === null || value === "") {
+  1107→      value = outputName;
+  1108→    }
+  1109→
+  1110→    this.setOutputData(0, value);
+  1111→
+  1112→    this.setDirtyCanvas(true, true);
+  1113→  }
+  1114→
+  1115→  static get title() {
+  1116→    return "Input";
+  1117→  }
+  1118→  static get name() {
+  1119→    return this.title;
+  1120→  }
+  1121→  static get id() {
+  1122→    return "a91cf4d0-481b-4eeb-8275-9c4f13a30bcb";
+  1123→  }
+  1124→  static get treePath() {
+  1125→    return "graph";
+  1126→  }
+  1127→}
+  1128→LiteGraph.GraphInput = GraphInput;
+  1129→LiteGraph.registerNodeType("graph/input", GraphInput);
+  1130→export class GraphOutput extends nodeMeta {
+  1131→  constructor() {
+  1132→    super();
+  1133→    this.outputs.length = 0;
+  1134→    this.inputs.length = 0;
+  1135→    this.addInput("", "string");
+  1136→    this.properties = { slotId: "" };
+  1137→  }
+  1138→  onExecute() {
+  1139→    const slotId = this.properties.slotId;
+  1140→    if (!this.graph || !slotId) return;
+  1141→
+  1142→    const parentNode = this.graph._subgraph_node;
+  1143→    if (!parentNode) return;
+  1144→
+  1145→    // 根据 id 找到父节点对应的 output slot 索引
+  1146→    const parentOutputSlotIndex = parentNode.outputs.findIndex(
+  1147→      (slot) => slot.id === slotId,
+  1148→    );
+  1149→    if (parentOutputSlotIndex === -1) return;
+  1150→
+  1151→    this.inputs[0].name = parentNode.outputs[parentOutputSlotIndex].name;
+  1152→
+  1153→    // 父节点 setOutputData 已被 nodeMeta wrapper 按 slot.valueMode 自动分发:
+  1154→    //   - label / placeholder → 写入物被替换为 slot.name / placeholderTemplate
+  1155→    //   - 默认               → 透传 inner wire 值
+  1156→    // 父节点子类(如 dbSubgraph)的 onExecute 末尾仍可覆盖此写入值。
+  1157→    parentNode.setOutputData(parentOutputSlotIndex, this.getInputData(0));
+  1158→
+  1159→    this.setDirtyCanvas(true, true);
+  1160→  }
+  1161→
+  1162→  static get title() {
+  1163→    return "Output";
+  1164→  }
+  1165→  static get desc() {
+  1166→    return "Output of the graph";
+  1167→  }
+  1168→  static get id() {
+  1169→    return "e4213698-8df1-463a-9cbb-d601e25d584b";
+  1170→  }
+  1171→  static get treePath() {
+  1172→    return "graph";
+  1173→  }
+  1174→}
+  1175→LiteGraph.GraphInput = GraphOutput;
+  1176→LiteGraph.registerNodeType("graph/output", GraphOutput);
+  1177→// 这些属性是标准节点属性。
+  1178→export function createDynamicClass(x, baseClass) {
+  1179→  return class extends baseClass {
+  1180→    constructor() {
+  1181→      super();
+  1182→      this.tag = x.tag;
+  1183→
+  1184→      // vnode的原始数据，根据这数据处理节点的输入输出 与初始化的工作
+  1185→      this.nodeRawData = x;
+  1186→      this.docs = x.meta?.docs;
+  1187→      this.categories = "ui";
+  1188→      this.importStr = x.importStr;
+  1189→
+  1190→      this.parentMustBe = x.parentMustBe;
+  1191→
+  1192→      // 🔥 如果是 uiNodeMeta 子类，直接在这里初始化 properties
+  1193→      if (
+  1194→        baseClass === uiNodeMeta ||
+  1195→        baseClass.prototype instanceof uiNodeMeta
+  1196→      ) {
+  1197→        const properties = {
+  1198→          props: {},
+  1199→          styleClass: {
+  1200→            ...(x.defaultStyleClass || {}),
+  1201→          },
+  1202→          events: {},
+  1203→          slots: {},
+  1204→          methods: {},
+  1205→          computedProps: {},
+  1206→          style: "",
+  1207→          wrappers: {
+  1208→            // v-if 和 v-show（互斥）
+  1209→            vIf: {
+  1210→              enabled: false,
+  1211→              condition: { value: "", isSlot: false },
+  1212→            },
+  1213→            vShow: {
+  1214→              enabled: false,
+  1215→              condition: { value: "", isSlot: false },
+  1216→            },
+  1217→            // Teleport
+  1218→            teleport: {
+  1219→              enabled: false,
+  1220→              to: '"body"',
+  1221→              disabled: false,
+  1222→              defer: false,
+  1223→            },
+  1224→            // KeepAlive
+  1225→            keepAlive: {
+  1226→              enabled: false,
+  1227→              include: "",
+  1228→              exclude: "",
+  1229→              max: null,
+  1230→            },
+  1231→            // Suspense
+  1232→            suspense: {
+  1233→              enabled: false,
+  1234→              timeout: undefined,
+  1235→              suspensible: false,
+  1236→              slots: {
+  1237→                default: "",
+  1238→                fallback: "",
+  1239→              },
+  1240→              events: {
+  1241→                onResolve: "",
+  1242→                onPending: "",
+  1243→                onFallback: "",
+  1244→              },
+  1245→            },
+  1246→            // Transition
+  1247→            transition: {
+  1248→              enabled: false,
+  1249→              name: '"fade"',
+  1250→              mode: "",
+  1251→              appear: false,
+  1252→              css: true,
+  1253→              type: '"transition"',
+  1254→              duration: "",
+  1255→              enterFromClass: "",
+  1256→              enterActiveClass: "",
+  1257→              enterToClass: "",
+  1258→              leaveFromClass: "",
+  1259→              leaveActiveClass: "",
+  1260→              leaveToClass: "",
+  1261→              appearClass: "",
+  1262→              appearActiveClass: "",
+  1263→              appearToClass: "",
+  1264→              events: {
+  1265→                onBeforeEnter: { value: "", isSlot: false },
+  1266→                onEnter: { value: "", isSlot: false },
+  1267→                onAfterEnter: { value: "", isSlot: false },
+  1268→                onEnterCancelled: { value: "", isSlot: false },
+  1269→                onBeforeLeave: { value: "", isSlot: false },
+  1270→                onLeave: { value: "", isSlot: false },
+  1271→                onAfterLeave: { value: "", isSlot: false },
+  1272→                onLeaveCancelled: { value: "", isSlot: false },
+  1273→                onBeforeAppear: { value: "", isSlot: false },
+  1274→                onAppear: { value: "", isSlot: false },
+  1275→                onAfterAppear: { value: "", isSlot: false },
+  1276→                onAppearCancelled: { value: "", isSlot: false },
+  1277→              },
+  1278→            },
+  1279→            // TransitionGroup
+  1280→            transitionGroup: {
+  1281→              enabled: false,
+  1282→              name: '"list"',
+  1283→              tag: '"div"',
+  1284→              appear: false,
+  1285→              css: true,
+  1286→              type: '"transition"',
+  1287→              duration: "",
+  1288→              moveClass: "",
+  1289→              enterFromClass: "",
+  1290→              enterActiveClass: "",
+  1291→              enterToClass: "",
+  1292→              leaveFromClass: "",
+  1293→              leaveActiveClass: "",
+  1294→              leaveToClass: "",
+  1295→              appearClass: "",
+  1296→              appearActiveClass: "",
+  1297→              appearToClass: "",
+  1298→              events: {
+  1299→                onBeforeEnter: { value: "", isSlot: false },
+  1300→                onEnter: { value: "", isSlot: false },
+  1301→                onAfterEnter: { value: "", isSlot: false },
+  1302→                onEnterCancelled: { value: "", isSlot: false },
+  1303→                onBeforeLeave: { value: "", isSlot: false },
+  1304→                onLeave: { value: "", isSlot: false },
+  1305→                onAfterLeave: { value: "", isSlot: false },
+  1306→                onLeaveCancelled: { value: "", isSlot: false },
+  1307→                onBeforeAppear: { value: "", isSlot: false },
+  1308→                onAppear: { value: "", isSlot: false },
+  1309→                onAfterAppear: { value: "", isSlot: false },
+  1310→                onAppearCancelled: { value: "", isSlot: false },
+  1311→              },
+  1312→            },
+  1313→            // Component（动态组件）
+  1314→            component: {
+  1315→              enabled: false,
+  1316→              is: "",
+  1317→            },
+  1318→          },
+  1319→          enhance: {
+  1320→            permissionConfig: null, // 权限配置
+  1321→          },
+  1322→        };
+  1323→
+  1324→        // 初始化 props
+  1325→        if (x.props) {
+  1326→          Object.keys(x.props).forEach((propName) => {
+  1327→            const propConfig = x.props[propName];
+  1328→            properties.props[propName] = {
+  1329→              data: "",
+  1330→              disable: false,
+  1331→              outType: propConfig.outType,
+  1332→            };
+  1333→          });
+  1334→        }
+  1335→
+  1336→        // 初始化 events
+  1337→        if (x.events) {
+  1338→          Object.keys(x.events).forEach((eventName) => {
+  1339→            properties.events[eventName] = false;
+  1340→          });
+  1341→        }
+  1342→
+  1343→        // 初始化 slots
+  1344→        if (x.slots) {
+  1345→          Object.keys(x.slots).forEach((slotName) => {
+  1346→            properties.slots[slotName] = false;
+  1347→          });
+  1348→        }
+  1349→
+  1350→        // 初始化 methods
+  1351→        if (x.methods) {
+  1352→          Object.keys(x.methods).forEach((methodName) => {
+  1353→            properties.methods[methodName] = false;
+  1354→          });
+  1355→        }
+  1356→
+  1357→        // 初始化 computedProps
+  1358→        if (x.computedProps) {
+  1359→          Object.keys(x.computedProps).forEach((computedProp) => {
+  1360→            properties.computedProps[computedProp] = false;
+  1361→          });
+  1362→        }
+  1363→
+  1364→        // 初始化 editorConfig（编辑器专用配置）
+  1365→        if (x.meta?.editorConfig) {
+  1366→          properties.enhance.editorConfig = {};
+  1367→          Object.keys(x.meta.editorConfig).forEach((key) => {
+  1368→            const config = x.meta.editorConfig[key];
+  1369→            properties.enhance.editorConfig[key] = {
+  1370→              value: config.default || "",
+  1371→              enabled: true,
+  1372→            };
+  1373→          });
+  1374→        }
+  1375→
+  1376→        this.properties = properties;
+  1377→      }
+  1378→    }
+  1379→    static get title() {
+  1380→      return x.name;
+  1381→    }
+  1382→    static get name() {
+  1383→      // return x.name.startsWith("Q") ? x.name.slice(1) : x.name;
+  1384→      return x.name;
+  1385→    }
+  1386→
+  1387→    static get treePath() {
+  1388→      return x.treePath || super.treePath;
+  1389→    }
+  1390→    // 使用传入的稳定 ID，而不是每次调用都生成新的 UUID
+  1391→    // 这确保节点类型在页面刷新后保持一致
+  1392→    static get id() {
+  1393→      return x.id;
+  1394→    }
+  1395→    // 以下静态属性供"按类读取"的场景使用（如 graphNodesForSearchData 构建搜索/容纳树）。
+  1396→    // 注意：tag/parentMustBe 同时也设在实例上(构造函数),但实例读取需先 new；静态可直接从注册类读。
+  1397→    static get tag() {
+  1398→      return x.tag;
+  1399→    }
+  1400→    static get parentMustBe() {
+  1401→      return x.parentMustBe || [];
+  1402→    }
+  1403→    // 父→子 正向容纳声明(软,仅用于搜索树推荐/从属显示,不参与硬校验)
+  1404→    static get allowChildren() {
+  1405→      return x.meta?.allowChildren || [];
+  1406→    }
+  1407→    // 所属/情境:JSON/配置可显式声明 categories,否则按 treePath 派生
+  1408→    static get categories() {
+  1409→      return x.categories || categoryOfTreePath(x.treePath || "");
+  1410→    }
+  1411→  };
+  1412→}
+  1413→

@@ -1,0 +1,1412 @@
+import { LiteGraph } from "@sonlia/node-engine";
+
+import _ from "lodash-es";
+import { defineAsyncComponent, markRaw } from "vue";
+import { uid as uuid } from "quasar";
+import {
+  migrateLegacyGridLayout,
+  applyGridContainerStyleToProps,
+} from "./webNode/layout/layoutControls/flexCodeGen.js";
+import { categoryOfTreePath } from "./nodeScope.js";
+
+// node 的复函数
+export class nodeMeta {
+  constructor() {
+    // 设置默认 mode 为 ALWAYS，确保 runStep 时会执行 onExecute
+    this.mode = LiteGraph.ALWAYS;
+
+    // 约定三角形：事件。 方形：slot。  圆心：变量
+    this.addInput("orderIn", "oderlink", {
+      shape: LiteGraph.GRID_SHAPE,
+      type: "orderSlot",
+      hideOnSubgraphPanel: true,
+    });
+    this.addOutput("orderOut", "oderlink", {
+      shape: LiteGraph.GRID_SHAPE,
+      type: "orderSlot",
+      hideOnSubgraphPanel: true,
+    });
+    this.importStr = undefined;
+    this.tag = undefined;
+    this.categories = undefined;
+    this.treePath = "default";
+    // 重写的 属性面板（使用 markRaw 避免 Vue 响应式警告）
+    this.uiPanel = markRaw(defineAsyncComponent(() => undefined));
+    this.jsCode = "";
+    this.bgJsCode = "";
+    this.parentMustBe = [];
+    this.docs = undefined;
+
+    // ==================== 调试 probe 自动追加 ====================
+    // 用 instance property 覆盖 prototype 方法,把"子类 onExecute 跑完后追加 probe"
+    // 内聚到基类。任何继承 nodeMeta 的节点设 __debugMode 后,jsCode/bgJsCode 自动
+    // 注入对应调试代码(trace / breakpoint / log)。
+    //
+    // 关键:super() 调用时子类 prototype.onExecute 通过原型链已可访问,
+    // 这里 bind 后存起来,wrapper 调它即可。
+    const _userOnExecute = this.onExecute ? this.onExecute.bind(this) : null;
+    this.onExecute = () => {
+      const result = _userOnExecute ? _userOnExecute() : undefined;
+      this._appendDebugInjection();
+      return result;
+    };
+  }
+
+  /**
+   * 按 properties.__debugMode 在 jsCode / bgJsCode 注入调试代码。
+   * 三种模式互斥单选:
+   * - 'trace'      → __vsProbe(...) 上报 slot 值到设计器 SSE
+   * - 'breakpoint' → debugger; 注入(UI 节点跳过,因 debugger 是 statement)
+   * - 'log'        → console.log('[node:id.side:slot]', expr) 注入
+   * - 'off' / 缺省 → 不注入
+   *
+   * 共享:
+   * - input 端表达式: graph.links[input.link].data (上游 setOutputData 写的变量名)
+   * - output 端表达式: outputs[i]._data (本节点写的变量名)
+   * - isProbeable 过滤防 UUID 含 '-' 引发 JS 解析错
+   *
+   * 形态分类:
+   * - UI 节点(this.categories === 'ui' || type 以 'ui/' 开头): jsCode 是表达式,
+   *   trace / log 用逗号操作符内嵌;breakpoint 整体跳过(无法塞 statement)
+   * - logic 节点: jsCode 是 statement,前后追加 probe statement
+   *
+   * 后端 helper(bgJsCode):trace 模式需要 inline globalThis.__vsProbe(用 fetch);
+   *   breakpoint / log 模式直接用全局可用的 debugger / console.log,无需 helper。
+   *
+   * 幂等: 已含调试标记 (__vsProbe(、/* __vs_dbg *\/) 的代码不重复注入。
+   */
+  _appendDebugInjection() {
+    const mode = this.properties?.__debugMode;
+    if (!mode || mode === 'off') return;
+
+    const isProbeable = (expr) => {
+      if (typeof expr !== 'string') return false;
+      const trimmed = expr.trim();
+      if (!trimmed) return false;
+      if (!/^[A-Za-z_$]/.test(trimmed)) return false;
+      if (trimmed.includes('-')) return false;
+      return true;
+    };
+
+    const slots = [];
+    if (Array.isArray(this.inputs)) {
+      for (const input of this.inputs) {
+        if (!input?.name) continue;
+        if (input.type === 'orderSlot') continue;
+        const linkId = input.link;
+        if (linkId == null) continue;
+        const link = this.graph?.links?.[linkId];
+        const varExpr = link?.data;
+        if (!isProbeable(varExpr)) continue;
+        slots.push({ side: 'in', slot: input.name, expr: varExpr });
+      }
+    }
+    if (Array.isArray(this.outputs)) {
+      for (const output of this.outputs) {
+        if (!output?.name) continue;
+        if (output.type === 'orderSlot') continue;
+        const varName = output._data;
+        if (!isProbeable(varName)) continue;
+        slots.push({ side: 'out', slot: output.name, expr: varName });
+      }
+    }
+
+    const isUi = this.categories === 'ui' || (typeof this.type === 'string' && this.type.startsWith('ui/'));
+
+    if (mode === 'breakpoint') {
+      // UI 节点 jsCode 是表达式,debugger 塞不进表达式,跳过前端注入;后端仍可注入
+      if (!isUi && this.jsCode && typeof this.jsCode === 'string' && !this.jsCode.includes('/* __vs_dbg */')) {
+        this.jsCode = `/* __vs_dbg */ debugger;\n${this.jsCode}`;
+      }
+      if (this.bgJsCode && typeof this.bgJsCode === 'string' && !this.bgJsCode.includes('/* __vs_dbg */')) {
+        this.bgJsCode = `/* __vs_dbg */ debugger;\n${this.bgJsCode}`;
+      }
+      return;
+    }
+
+    if (slots.length === 0) return;
+
+    const nodeIdLit = JSON.stringify(this.id);
+    const inSlots = slots.filter(s => s.side === 'in');
+    const outSlots = slots.filter(s => s.side === 'out');
+
+    if (mode === 'log') {
+      // console.log 注入,前端后端通用
+      const logExpr = (s) =>
+        `console.log(${JSON.stringify(`[node:${this.id}.${s.side}:${s.slot}]`)}, ${s.expr})`;
+
+      if (this.jsCode && typeof this.jsCode === 'string' && !this.jsCode.includes('/* __vs_dbg */')) {
+        if (isUi) {
+          const all = slots.map(logExpr);
+          this.jsCode = `/* __vs_dbg */ (${all.join(', ')}, ${this.jsCode})`;
+        } else {
+          const before = inSlots.map(s => `${logExpr(s)};`).join('\n');
+          const after = outSlots.map(s => `${logExpr(s)};`).join('\n');
+          this.jsCode = `/* __vs_dbg */\n${before ? before + '\n' : ''}${this.jsCode}${after ? '\n' + after : ''}`;
+        }
+      }
+      // 路由 wrapper 形态(bgJsCode 是 fastify.xxx(...) 闭包)的节点跳过 bgJsCode 注入,
+      // 否则前/后追加的 log 会落在闭包外, 引用闭包内变量(in0/out0)导致 ReferenceError.
+      const isRouteWrapperBg = typeof this.bgJsCode === 'string' && this.bgJsCode.includes('fastify.');
+      if (!isRouteWrapperBg && this.bgJsCode && typeof this.bgJsCode === 'string' && !this.bgJsCode.includes('/* __vs_dbg */')) {
+        const before = inSlots.map(s => `${logExpr(s)};`).join('\n');
+        const after = outSlots.map(s => `${logExpr(s)};`).join('\n');
+        this.bgJsCode = `/* __vs_dbg */\n${before ? before + '\n' : ''}${this.bgJsCode}${after ? '\n' + after : ''}`;
+      }
+      return;
+    }
+
+    if (mode === 'trace') {
+      const inputProbes = inSlots.map(s => ({
+        key: JSON.stringify(`${this.id}:in:${s.slot}`),
+        slot: JSON.stringify(s.slot),
+        expr: s.expr,
+        side: 'in',
+      }));
+      const outputProbes = outSlots.map(s => ({
+        key: JSON.stringify(`${this.id}:out:${s.slot}`),
+        slot: JSON.stringify(s.slot),
+        expr: s.expr,
+        side: 'out',
+      }));
+
+      if (this.jsCode && typeof this.jsCode === 'string' && !this.jsCode.includes('__vsProbe(')) {
+        const feProbeExpr = (p) =>
+          `__vsProbe(${p.key}, ${p.expr}, { nodeId: ${nodeIdLit}, slot: ${p.slot}, side: '${p.side}' })`;
+
+        if (isUi) {
+          const allProbes = [...inputProbes, ...outputProbes].map(feProbeExpr);
+          const guarded = allProbes.map(p => `(typeof __vsProbe === 'function' && ${p})`);
+          this.jsCode = `(${guarded.join(', ')}, ${this.jsCode})`;
+        } else {
+          const before = inputProbes.map(p => `if (typeof __vsProbe === 'function') ${feProbeExpr(p)};`);
+          const after = outputProbes.map(p => `if (typeof __vsProbe === 'function') ${feProbeExpr(p)};`);
+          const beforeCode = before.length ? before.join('\n') + '\n' : '';
+          const afterCode = after.length ? '\n' + after.join('\n') : '';
+          this.jsCode = `${beforeCode}${this.jsCode}${afterCode}`;
+        }
+      }
+
+      if (this.bgJsCode && typeof this.bgJsCode === 'string' && !this.bgJsCode.includes('__vsProbe(')) {
+        // 路由 wrapper 形态(bgJsCode 整体是 fastify.xxx(...) 闭包)跳过 trace 注入,
+        // 否则前/后追加的 __vsProbe 会落在闭包外, 引用闭包内 in0/out0 等变量导致 ReferenceError,
+        // fastify 启动阶段直接崩溃. 前端 jsCode 端的 trace 已覆盖这些 slot, 后端无需再注入.
+        const isRouteWrapperBg = this.bgJsCode.includes('fastify.');
+        if (!isRouteWrapperBg) {
+          const helper = `if (typeof globalThis.__vsProbe !== 'function') { globalThis.__vsProbe = (k, v, m) => { try { fetch(\`\${process.env.VS_DESIGNER || 'http://localhost:3000'}/api/debug/value/\${process.env.VS_PROJECT_ID}\`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ probeKey: k, value: v, ...m, timestamp: Date.now() }) }).catch(()=>{}); } catch {} }; }`;
+          const beProbeExpr = (p) =>
+            `__vsProbe(${p.key}, ${p.expr}, { nodeId: ${nodeIdLit}, slot: ${p.slot}, side: '${p.side}' })`;
+
+          const before = inputProbes.map(p => `if (typeof __vsProbe === 'function') ${beProbeExpr(p)};`);
+          const after = outputProbes.map(p => `if (typeof __vsProbe === 'function') ${beProbeExpr(p)};`);
+          const beforeCode = (before.length || after.length) ? helper + '\n' + (before.length ? before.join('\n') + '\n' : '') : '';
+          const afterCode = after.length ? '\n' + after.join('\n') : '';
+          this.bgJsCode = `${beforeCode}${this.bgJsCode}${afterCode}`;
+        }
+      }
+    }
+  }
+
+  /**
+   * litegraph 节点前景绘制:按 __debugMode 在节点右上角画 6×6 色块。
+   * 由 litegraph 在每帧 redraw 时调用,基类一次实现,所有子类自动生效。
+   */
+  onDrawForeground(ctx) {
+    const mode = this.properties?.__debugMode;
+    if (!mode || mode === 'off') return;
+    const color =
+      mode === 'trace' ? '#ffb300' :
+      mode === 'breakpoint' ? '#e53935' :
+      mode === 'log' ? '#42a5f5' : null;
+    if (!color) return;
+    if (!this.size) return;
+    const x = this.size[0] - 12;
+    const y = -10;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, 6, 6);
+  }
+
+  // 工具方法：切换多个输出槽的 hideOnNode 状态
+  toggleOutputSlotsHideOnNode(slotNames, isHidden) {
+    slotNames.forEach((name) => {
+      const index = this.outputs.findIndex((x) => x.name === name);
+      if (index !== -1) {
+        this.outputs[index].hideOnNode = isHidden;
+      }
+    });
+  }
+
+  static get title() {
+    return "Input";
+  }
+  static get name() {
+    return this.title;
+  }
+  static get id() {
+    return uuid();
+  }
+  static get treePath() {
+    return "default"; // This defines the category path in the menu
+  }
+  static get parentMustBe() {
+    return [];
+  }
+  // 所属/情境(显式静态,可被子类或 JSON 覆盖):默认按 treePath 顶段派生
+  static get categories() {
+    return categoryOfTreePath(this.treePath);
+  }
+}
+
+// 修改 Subgraph 类定义
+export class Subgraph extends nodeMeta {
+  constructor() {
+    super();
+
+    this.output_node_type = "graph/output";
+    //create inner graph
+    this.subgraph = new LiteGraph.LGraph();
+    this.subgraph._subgraph_node = this;
+    this.subgraph._is_subgraph = true;
+
+    this.subgraph.onTrigger = this.onSubgraphTrigger.bind(this);
+
+    //nodes input node added inside
+    this.subgraph.onInputAdded = this.onSubgraphNewInput.bind(this);
+    this.subgraph.onInputRenamed = this.onSubgraphRenamedInput.bind(this);
+    this.subgraph.onInputTypeChanged =
+      this.onSubgraphTypeChangeInput.bind(this);
+    this.subgraph.onInputRemoved = this.onSubgraphRemovedInput.bind(this);
+
+    this.subgraph.onOutputAdded = this.onSubgraphNewOutput.bind(this);
+    this.subgraph.onOutputRenamed = this.onSubgraphRenamedOutput.bind(this);
+    this.subgraph.onOutputTypeChanged =
+      this.onSubgraphTypeChangeOutput.bind(this);
+    this.subgraph.onOutputRemoved = this.onSubgraphRemovedOutput.bind(this);
+    this.subgraph.onNodeAdded = this.onSubgraphStructureChanged.bind(this);
+    this.subgraph.onNodeRemoved = this.onSubgraphStructureChanged.bind(this);
+    this.subgraph.onConnectionChange =
+      this.onSubgraphStructureChanged.bind(this);
+  }
+
+  onDblClick(e, pos, graphcanvas) {
+    var that = this;
+    setTimeout(function () {
+      graphcanvas.openSubgraph(that.subgraph);
+    }, 10);
+  }
+
+  onExecute() {
+
+    if (this.inputs) {
+      for (var i = 0; i < this.inputs.length; i++) {
+        var input = this.inputs[i];
+        var value = this.getInputData(i);
+        this.subgraph.setInputData(input.name, value);
+      }
+    }
+
+    this.subgraph.runStep();
+
+
+    if (this.outputs) {
+      for (var i = 0; i < this.outputs.length; i++) {
+        var output = this.outputs[i];
+        var value = this.subgraph.getOutputData(output.name);
+
+          this.setOutputData(i, value);
+
+      }
+    }
+  }
+
+  sendEventToAllNodes(eventname, param, mode) {
+    this.subgraph.sendEventToAllNodes(eventname, param, mode);
+  }
+
+  computeSize() {
+    var num_inputs = this.inputs
+      ? this.inputs.filter((slot) => !slot.hideOnNode).length
+      : 0;
+    var num_outputs = this.outputs
+      ? this.outputs.filter((slot) => !slot.hideOnNode).length
+      : 0;
+    return [
+      200,
+      Math.max(num_inputs, num_outputs) * LiteGraph.NODE_SLOT_HEIGHT + 8,
+    ];
+  }
+  onSubgraphTrigger(event, param) {
+    var slot = this.findOutputSlot(event);
+    if (slot != -1) {
+      this.triggerSlot(slot);
+    }
+  }
+
+  onSubgraphStructureChanged() {
+    this._dirty = true;
+    this.graph?.setDirtyCanvas?.(true, true);
+    this.graph?.onNodeConnectionChange?.(this);
+  }
+
+  onSubgraphNewInput(name, type, options) {
+    var slot = this.findInputSlot(name);
+    if (slot == -1) {
+      // 添加输入槽，如果 options.hideOnNode 为 true，则隐藏
+      this.addInput(name, type, options || {});
+    } else if (options && this.inputs && this.inputs[slot]) {
+      Object.assign(this.inputs[slot], options);
+    }
+  }
+
+  onSubgraphRenamedInput(oldname, name) {
+    var slot = this.findInputSlot(oldname);
+    if (slot == -1) {
+      return;
+    }
+    var info = this.getInputInfo(slot);
+    info.name = name;
+  }
+
+  onSubgraphTypeChangeInput(name, type) {
+    var slot = this.findInputSlot(name);
+    if (slot == -1) {
+      return;
+    }
+    var info = this.getInputInfo(slot);
+    info.type = type;
+  }
+
+  onSubgraphRemovedInput(name) {
+    var slot = this.findInputSlot(name);
+    if (slot == -1) {
+      return;
+    }
+    this.removeInput(slot);
+  }
+
+  onSubgraphNewOutput(name, type, options) {
+    var slot = this.findOutputSlot(name);
+    if (slot == -1) {
+      this.addOutput(name, type, options || {});
+    } else if (options && this.outputs && this.outputs[slot]) {
+      Object.assign(this.outputs[slot], options);
+    }
+  }
+
+  onSubgraphRenamedOutput(oldname, name) {
+    var slot = this.findOutputSlot(oldname);
+    if (slot == -1) {
+      return;
+    }
+    var info = this.getOutputInfo(slot);
+    info.name = name;
+  }
+
+  onSubgraphTypeChangeOutput(name, type) {
+    var slot = this.findOutputSlot(name);
+    if (slot == -1) {
+      return;
+    }
+    var info = this.getOutputInfo(slot);
+    info.type = type;
+  }
+
+  onSubgraphRemovedOutput(name) {
+    var slot = this.findOutputSlot(name);
+    if (slot == -1) {
+      return;
+    }
+    this.removeOutput(slot);
+  }
+  serialize() {
+    var data = LiteGraph.LGraphNode.prototype.serialize.call(this);
+    data.subgraph = this.subgraph.serialize();
+    return data;
+  }
+  reassignSubgraphUUIDs(graph) {
+    const idMap = { nodeIDs: {}, linkIDs: {} };
+
+    for (const node of graph.nodes) {
+      const oldID = node.id;
+      const newID = LiteGraph.uuidv4();
+      node.id = newID;
+
+      if (idMap.nodeIDs[oldID] || idMap.nodeIDs[newID]) {
+        throw new Error(
+          `New/old node UUID wasn't unique in changed map! ${oldID} ${newID}`,
+        );
+      }
+
+      idMap.nodeIDs[oldID] = newID;
+      idMap.nodeIDs[newID] = oldID;
+    }
+
+    for (const link of graph.links) {
+      const oldID = link[0];
+      const newID = LiteGraph.uuidv4();
+      link[0] = newID;
+
+      if (idMap.linkIDs[oldID] || idMap.linkIDs[newID]) {
+        throw new Error(
+          `New/old link UUID wasn't unique in changed map! ${oldID} ${newID}`,
+        );
+      }
+
+      idMap.linkIDs[oldID] = newID;
+      idMap.linkIDs[newID] = oldID;
+
+      const nodeFrom = link[1];
+      const nodeTo = link[3];
+
+      if (!idMap.nodeIDs[nodeFrom]) {
+        throw new Error(`Old node UUID not found in mapping! ${nodeFrom}`);
+      }
+
+      link[1] = idMap.nodeIDs[nodeFrom];
+
+      if (!idMap.nodeIDs[nodeTo]) {
+        throw new Error(`Old node UUID not found in mapping! ${nodeTo}`);
+      }
+
+      link[3] = idMap.nodeIDs[nodeTo];
+    }
+
+    // Reconnect links
+    for (const node of graph.nodes) {
+      if (node.inputs) {
+        for (const input of node.inputs) {
+          if (input.link) {
+            input.link = idMap.linkIDs[input.link];
+          }
+        }
+      }
+      if (node.outputs) {
+        for (const output of node.outputs) {
+          if (output.links) {
+            output.links = output.links.map((l) => idMap.linkIDs[l]);
+          }
+        }
+      }
+    }
+
+    // Recurse!
+    for (const node of graph.nodes) {
+      if (node.type === "graph/subgraph") {
+        const merge = reassignGraphUUIDs(node.subgraph);
+        idMap.nodeIDs.assign(merge.nodeIDs);
+        idMap.linkIDs.assign(merge.linkIDs);
+      }
+    }
+  }
+
+  clone() {
+    var node = LiteGraph.createNode(this.type);
+    var data = this.serialize();
+
+    if (LiteGraph.use_uuids) {
+      // LGraph.serialize() seems to reuse objects in the original graph. But we
+      // need to change node IDs here, so clone it first.
+      const subgraph = LiteGraph.cloneObject(data.subgraph);
+
+      this.reassignSubgraphUUIDs(subgraph);
+
+      data.subgraph = subgraph;
+    }
+
+    delete data["id"];
+    delete data["inputs"];
+    delete data["outputs"];
+    node.configure(data);
+    return node;
+  }
+
+  static get title() {
+    return "Subgraph";
+  }
+  static get desc() {
+    return "Graph inside a node";
+  }
+  static get title_color() {
+    return "#339";
+  }
+  static get treePath() {
+    return "graph";
+  }
+  static get id() {
+    return "cf23d05b-0320-48fd-92d9-4a1c4d6a5cd1";
+  }
+}
+
+// 修改 uiNodeMeta 类定义
+export class uiNodeMeta extends nodeMeta {
+  constructor() {
+    super(); // 调用父类构造函数
+
+    this.bgcolor = "#533";
+    this.color = "#322";
+    this.categories = "ui";
+    this.addOutput("Ref", "string", {
+      shape: LiteGraph.CARD_SHAPE,
+      arguments: "",
+    });
+    // 删除默认的 show input slot，改为通过增强面板配置
+    // this.addInput("show", "string");
+    // UI节点使用默认的标签面板系统（使用 markRaw 避免 Vue 响应式警告）
+    this.uiPanel = markRaw(
+      defineAsyncComponent(
+        () => import("../propertyPanel/DefaultNodePanel.vue"),
+      ),
+    );
+    this.categories = "ui";
+    // 添加节点基本属性
+    this.tag = undefined;
+    this.nodeRawData = {
+      uiPanel: undefined,
+      treePath: undefined,
+      tag: undefined,
+      importStr: undefined,
+      meta: {},
+
+      slots: {},
+      events: {},
+      props: {},
+      methods: {},
+      computedProps: {},
+    };
+    // 初始化基础结构（保持空结构，等待 createDynamicClass 填充）
+    this.properties = {
+      props: {},
+      styleClass: {},
+      events: {},
+      slots: {},
+      methods: {},
+      computedProps: {},
+      style: "",
+      wrappers: {
+        // v-if 和 v-show（互斥）
+        vIf: {
+          enabled: false,
+          condition: { value: "", isSlot: false },
+        },
+        vShow: {
+          enabled: false,
+          condition: { value: "", isSlot: false },
+        },
+        // Teleport
+        teleport: {
+          enabled: false,
+          to: '"body"',
+          disabled: false,
+          defer: false,
+        },
+        // KeepAlive
+        keepAlive: {
+          enabled: false,
+          include: "",
+          exclude: "",
+          max: null,
+        },
+        // Suspense
+        suspense: {
+          enabled: false,
+          timeout: undefined,
+          suspensible: false,
+          slots: {
+            default: "",
+            fallback: "",
+          },
+          events: {
+            onResolve: "",
+            onPending: "",
+            onFallback: "",
+          },
+        },
+        // Transition
+        transition: {
+          enabled: false,
+          name: '"fade"',
+          mode: "",
+          appear: false,
+          css: true,
+          type: '"transition"',
+          duration: "",
+          enterFromClass: "",
+          enterActiveClass: "",
+          enterToClass: "",
+          leaveFromClass: "",
+          leaveActiveClass: "",
+          leaveToClass: "",
+          appearClass: "",
+          appearActiveClass: "",
+          appearToClass: "",
+          events: {
+            onBeforeEnter: { value: "", isSlot: false },
+            onEnter: { value: "", isSlot: false },
+            onAfterEnter: { value: "", isSlot: false },
+            onEnterCancelled: { value: "", isSlot: false },
+            onBeforeLeave: { value: "", isSlot: false },
+            onLeave: { value: "", isSlot: false },
+            onAfterLeave: { value: "", isSlot: false },
+            onLeaveCancelled: { value: "", isSlot: false },
+            onBeforeAppear: { value: "", isSlot: false },
+            onAppear: { value: "", isSlot: false },
+            onAfterAppear: { value: "", isSlot: false },
+            onAppearCancelled: { value: "", isSlot: false },
+          },
+        },
+        // TransitionGroup
+        transitionGroup: {
+          enabled: false,
+          name: '"list"',
+          tag: '"div"',
+          appear: false,
+          css: true,
+          type: '"transition"',
+          duration: "",
+          moveClass: "",
+          enterFromClass: "",
+          enterActiveClass: "",
+          enterToClass: "",
+          leaveFromClass: "",
+          leaveActiveClass: "",
+          leaveToClass: "",
+          appearClass: "",
+          appearActiveClass: "",
+          appearToClass: "",
+          events: {
+            onBeforeEnter: { value: "", isSlot: false },
+            onEnter: { value: "", isSlot: false },
+            onAfterEnter: { value: "", isSlot: false },
+            onEnterCancelled: { value: "", isSlot: false },
+            onBeforeLeave: { value: "", isSlot: false },
+            onLeave: { value: "", isSlot: false },
+            onAfterLeave: { value: "", isSlot: false },
+            onLeaveCancelled: { value: "", isSlot: false },
+            onBeforeAppear: { value: "", isSlot: false },
+            onAppear: { value: "", isSlot: false },
+            onAfterAppear: { value: "", isSlot: false },
+            onAppearCancelled: { value: "", isSlot: false },
+          },
+        },
+        // Component（动态组件）
+        component: {
+          enabled: false,
+          is: "",
+        },
+      },
+      enhance: {
+        permissionConfig: null, // 权限配置
+      },
+    };
+  }
+
+  /**
+   * 生成 UI 节点的 VNode 代码字符串
+   *
+
+   * 占位符说明：
+   * - __NODE_PROPS_{nodeId}__ : 节点自身 props（最终会与 visualStyle 合并）
+   * - __CHILDREN_{nodeId}__  : 子节点 VNode（由 dragEditor schema 决定）
+   * - __FUNC_{id}_{name}__   : FunctionBlock 的函数代码
+   *
+   * @returns {string} h() 函数调用代码
+   */
+  genCode() {
+    const copyP = this.properties;
+    const tag = this.tag || "div";
+    const nodeId = this.id;
+
+    // 老 GridLayout 节点数据迁移(meta.layoutType==='grid' → properties.gridConfig)
+    migrateLegacyGridLayout(copyP, this.nodeRawData);
+
+    // 设置 Ref 输出数据
+    this.setOutputData(this.findOutputSlot("Ref"), nodeId);
+
+    // 辅助函数：格式化对象 key（包含特殊字符时用引号包裹）
+    const safeKey = (name) => {
+      if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)) {
+        return `'${name}'`;
+      }
+      return name;
+    };
+    const stringifyLiteralProp = (value) =>
+      JSON.stringify(String(value)).replace(/<\/script/gi, "<\\/script");
+
+    // 收集 props（节点自身的属性配置）
+    const propsEntries = [];
+
+    if (copyP && Object.keys(copyP).length > 0) {
+      // 处理 props
+      if (copyP.props) {
+        for (const propName in copyP.props) {
+          const propConfig = copyP.props[propName];
+          if (propConfig.isSlot === true) {
+            if (this.findInputSlot(propName) === -1) {
+              this.addInput(propName, "string");
+            }
+            const inputSlotIndex = this.findInputSlot(propName);
+            if (inputSlotIndex !== -1) {
+              const slotValue = this.getInputData(inputSlotIndex);
+              if (
+                slotValue !== undefined &&
+                slotValue !== null &&
+                slotValue !== ""
+              ) {
+                propsEntries.push(`${safeKey(propName)}: ${slotValue}`);
+              }
+            }
+          } else if (!propConfig.disable) {
+            // 优先使用 value（面板设置的值），回退到 data（兼容旧数据）
+            let propValue;
+            if (propConfig.value !== undefined && propConfig.value !== "") {
+              propValue = propConfig.value;
+            } else if (
+              propConfig.data !== undefined &&
+              propConfig.data !== ""
+            ) {
+              propValue = propConfig.data;
+            }
+
+            if (propValue !== undefined && propValue !== "") {
+              if (propConfig.literalString === true) {
+                propsEntries.push(
+                  `${safeKey(propName)}: ${stringifyLiteralProp(propValue)}`,
+                );
+              } else {
+                propsEntries.push(`${safeKey(propName)}: ${propValue}`);
+              }
+            }
+          }
+        }
+      }
+
+      // 处理 styleClass
+      if (copyP.styleClass) {
+        const styleCls = new Set();
+        for (const key in copyP.styleClass) {
+          const val = copyP.styleClass[key];
+          if (Array.isArray(val)) {
+            val.forEach((c) => styleCls.add(c));
+          } else if (val !== null && val !== undefined && val !== "") {
+            styleCls.add(val);
+          }
+        }
+        const classString = Array.from(styleCls).join(" ");
+        if (classString.trim()) {
+          propsEntries.push(`class: "${classString}"`);
+        }
+      }
+
+      // 处理自定义 CSS 样式
+      if (
+        copyP.style &&
+        typeof copyP.style === "string" &&
+        copyP.style.trim()
+      ) {
+        propsEntries.push(`style: "${copyP.style}"`);
+      }
+
+      // 处理编辑器专用样式（只在编辑模式生效）
+      if (copyP?.enhance?.editorConfig) {
+        const ec = copyP.enhance.editorConfig;
+        const styleArr = [];
+        if (ec.width?.value && ec.width?.enabled !== false) {
+          styleArr.push(`width: ${ec.width.value}`);
+        }
+        if (ec.height?.value && ec.height?.enabled !== false) {
+          styleArr.push(`height: ${ec.height.value}`);
+        }
+        if (styleArr.length > 0) {
+          propsEntries.push(`__editorStyle: "${styleArr.join("; ")}"`);
+        }
+      }
+
+      // 传递编辑器行为配置到预览运行时
+      if (this.nodeRawData?.meta?.editorBehavior) {
+        propsEntries.push(
+          `__editorBehavior: ${JSON.stringify(this.nodeRawData.meta.editorBehavior)}`,
+        );
+      }
+
+      if (this.nodeRawData?.meta?.editorPreview) {
+        propsEntries.push(
+          `__editorPreview: ${JSON.stringify(this.nodeRawData.meta.editorPreview)}`,
+        );
+      }
+
+      propsEntries.push(
+        `__editorLabel: ${JSON.stringify(this.nodeRawData?.name || this.tag || this.title || "")}`,
+      );
+
+      if (copyP?.enhance?.isLayoutPart) {
+        propsEntries.push(`__layoutPart: true`);
+      }
+
+      // grid 容器 CSS + __gridLayout/__gridConfig 元数据(委托给 layout 模块,
+      // 服务任意带 gridConfig 的 UI 节点 — Layout 节点 grid 模式也会用到这里产出的元数据)
+      applyGridContainerStyleToProps(propsEntries, copyP);
+
+      // 处理事件 - 只有连接了 FunctionBlock 才生成 __FUNC__ 占位符
+      if (copyP.events) {
+        for (const eventName in copyP.events) {
+          const slotName = "E#" + eventName;
+          if (copyP.events[eventName] === true) {
+            if (this.findInputSlot(slotName) === -1) {
+              const eventParams =
+                this.nodeRawData.events?.[eventName]?.params || {};
+              const paramNames = Object.keys(eventParams);
+              this.addInput(slotName, "function", {
+                shape: 5,
+                meta: { args: paramNames },
+              });
+            }
+
+            const inputSlotIndex = this.findInputSlot(slotName);
+            let functionBlockId = null;
+            if (
+              inputSlotIndex !== -1 &&
+              this.inputs[inputSlotIndex].link &&
+              this.graph
+            ) {
+              const linkInfo =
+                this.graph.links[this.inputs[inputSlotIndex].link];
+              if (linkInfo) {
+                const sourceNode = this.graph._nodes_by_id[linkInfo.origin_id];
+                if (
+                  sourceNode &&
+                  (sourceNode.type === "FunctionBlock" ||
+                    sourceNode.constructor.name === "FunctionBlock")
+                ) {
+                  functionBlockId = sourceNode.id;
+                }
+              }
+            }
+
+            // 只有连接了 FunctionBlock 才生成事件处理代码
+            if (functionBlockId) {
+              const eventHandlerName =
+                "on" +
+                eventName
+                  .split(/[-]/)
+                  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+                  .join("");
+
+              propsEntries.push(
+                `${eventHandlerName}: __FUNC_${functionBlockId}__`,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // 收集 slots (children) - 只收集连接了 FunctionBlock 的 slot
+    // 使用 Map 存储 slotName -> functionBlockId 的映射
+    const slotToFuncMap = new Map();
+    if (copyP?.slots) {
+      for (const slotName in copyP.slots) {
+        const inputSlotName = `S#${slotName}`;
+        if (copyP.slots[slotName] === true) {
+          const slotScope = this.nodeRawData.slots?.[slotName]?.scope || {};
+          const scopeParams = Object.keys(slotScope);
+
+          if (this.findInputSlot(inputSlotName) === -1) {
+            this.addInput(inputSlotName, "function", {
+              shape: 5,
+              meta: { args: scopeParams },
+              slotName: slotName,
+            });
+          }
+
+          const inputSlotIndex = this.findInputSlot(inputSlotName);
+          let functionBlockId = null;
+          if (
+            inputSlotIndex !== -1 &&
+            this.inputs[inputSlotIndex].link &&
+            this.graph
+          ) {
+            const linkInfo = this.graph.links[this.inputs[inputSlotIndex].link];
+            if (linkInfo) {
+              const sourceNode = this.graph._nodes_by_id[linkInfo.origin_id];
+              if (
+                sourceNode &&
+                (sourceNode.type === "FunctionBlock" ||
+                  sourceNode.constructor.name === "FunctionBlock")
+              ) {
+                functionBlockId = sourceNode.id;
+              }
+            }
+          }
+
+          // 只有连接了 FunctionBlock 才记录映射
+          if (functionBlockId) {
+            slotToFuncMap.set(slotName, functionBlockId);
+          }
+        }
+      }
+    }
+
+    const nodePropsStr =
+      propsEntries.length > 0 ? `{ ${propsEntries.join(", ")} }` : "{}";
+
+    // Layout 节点专用 VNode(由 LayoutNodeMeta 子类实现 _buildLayoutVnode hook;
+    // 普通 UI 节点本钩子不存在,layoutVnodeCode 为 undefined,走标准 createNode 路径)
+    const layoutVnodeCode = this._buildLayoutVnode?.(propsEntries, nodeId, tag, copyP);
+
+    // children 占位符：为每个 slot 生成独立占位符 __CHILDREN_id_slotName__
+    // FunctionBlock 连接的 slot 使用 __FUNC__，否则使用 dragEditor children 占位符
+    const definedSlots = this.nodeRawData?.slots || {};
+    const allSlotNames = Object.keys(definedSlots);
+
+    let childrenStr;
+    if (allSlotNames.length === 0) {
+      // 组件没有定义 slots（自闭合组件）
+      childrenStr = "null";
+    } else if (copyP.gridConfig) {
+      // Grid 模式协议:children 必须是数组形式,assembler 会按 __gridLayout 重新包裹定位 div
+      childrenStr = `__CHILDREN_${nodeId}_default__`;
+    } else {
+      // 为每个 slot 生成代码
+      const allSlotsCode = allSlotNames.map((slotName) => {
+        const formattedKey = safeKey(slotName);
+        if (slotToFuncMap.has(slotName)) {
+          // 使用 FunctionBlock 连接的代码
+          const funcId = slotToFuncMap.get(slotName);
+          return `${formattedKey}: __FUNC_${funcId}__`;
+        }
+        // 使用 dragEditor children 占位符
+        return `${formattedKey}: () => __CHILDREN_${nodeId}_${slotName}__`;
+      });
+      childrenStr = `{ ${allSlotsCode.join(", ")} }`;
+    }
+
+    // tag 不加引号，作为组件引用（如 QBtn），而不是字符串
+    let vnodeCode = layoutVnodeCode
+      ? layoutVnodeCode
+      : `createNode(${tag}, "${nodeId}", ${nodePropsStr}, ${childrenStr})`;
+
+    // 结构包裹（如 RouterView 自动包裹 QPage）
+    const wrapperTag = this.nodeRawData?.meta?.wrapperTag;
+    if (wrapperTag) {
+      vnodeCode = `h(${wrapperTag}, {}, { default: () => [${vnodeCode}] })`;
+    }
+
+    // 处理条件渲染和包装组件
+    // 顺序：vShow -> Transition -> KeepAlive -> Teleport -> vIf（最外层）
+    if (copyP?.wrappers) {
+      // vShow（指令，直接作用于元素）
+      if (copyP.wrappers.vShow?.enabled) {
+        const condition = copyP.wrappers.vShow.condition;
+        let conditionExpr = "true";
+        if (condition?.isSlot) {
+          const slotNameV = `V#vShow`;
+          const inputSlotIndexV = this.findInputSlot(slotNameV);
+          if (inputSlotIndexV !== -1) {
+            const slotValue = this.getInputData(inputSlotIndexV);
+            if (slotValue) conditionExpr = slotValue;
+          }
+        } else if (condition?.value) {
+          conditionExpr = condition.value;
+        }
+        vnodeCode = `withDirectives(${vnodeCode}, [[vShow, ${conditionExpr}]])`;
+      }
+
+      // Transition
+      if (copyP.wrappers.transition?.enabled) {
+        const transProps = copyP.wrappers.transition;
+        const transPropsArr = [];
+        if (transProps.name) transPropsArr.push(`name: ${transProps.name}`);
+        if (transProps.mode) transPropsArr.push(`mode: "${transProps.mode}"`);
+        if (transProps.appear) transPropsArr.push(`appear: true`);
+        const transPropsStr =
+          transPropsArr.length > 0 ? `{ ${transPropsArr.join(", ")} }` : "{}";
+        vnodeCode = `h(Transition, ${transPropsStr}, () => ${vnodeCode})`;
+      }
+
+      // KeepAlive
+      if (copyP.wrappers.keepAlive?.enabled) {
+        const kaProps = copyP.wrappers.keepAlive;
+        const kaPropsArr = [];
+        if (kaProps.include) kaPropsArr.push(`include: ${kaProps.include}`);
+        if (kaProps.exclude) kaPropsArr.push(`exclude: ${kaProps.exclude}`);
+        if (kaProps.max) kaPropsArr.push(`max: ${kaProps.max}`);
+        const kaPropsStr =
+          kaPropsArr.length > 0 ? `{ ${kaPropsArr.join(", ")} }` : "{}";
+        vnodeCode = `h(KeepAlive, ${kaPropsStr}, () => ${vnodeCode})`;
+      }
+
+      // Teleport
+      if (copyP.wrappers.teleport?.enabled) {
+        const tpProps = copyP.wrappers.teleport;
+        const tpPropsArr = [`to: ${tpProps.to || '"body"'}`];
+        if (tpProps.disabled) tpPropsArr.push(`disabled: true`);
+        const tpPropsStr = `{ ${tpPropsArr.join(", ")} }`;
+        vnodeCode = `h(Teleport, ${tpPropsStr}, ${vnodeCode})`;
+      }
+
+      // vIf（最外层，包裹所有内容）
+      if (copyP.wrappers.vIf?.enabled) {
+        const condition = copyP.wrappers.vIf.condition;
+        let conditionExpr = "true";
+        if (condition?.isSlot) {
+          const slotNameV = `V#vIf`;
+          const inputSlotIndexV = this.findInputSlot(slotNameV);
+          if (inputSlotIndexV !== -1) {
+            const slotValue = this.getInputData(inputSlotIndexV);
+            if (slotValue) conditionExpr = slotValue;
+          }
+        } else if (condition?.value) {
+          conditionExpr = condition.value;
+        }
+        vnodeCode = `${conditionExpr} ? ${vnodeCode} : null`;
+      }
+    }
+
+    return vnodeCode;
+  }
+
+  onExecute() {
+    this.jsCode = this.genCode();
+  }
+}
+
+class GraphInput extends nodeMeta {
+  constructor() {
+    super();
+    this.outputs.length = 0;
+    this.inputs.length = 0;
+    this.addOutput("", "string");
+    this.properties = { slotId: "" };
+  }
+
+  onConnectionsChange() {
+    this.onExecute();
+  }
+
+  onExecute() {
+    const slotId = this.properties.slotId;
+    if (!this.graph || !slotId) return;
+
+    // 获取父节点（FunctionBlock/Subgraph）
+    const parentNode = this.graph._subgraph_node;
+    if (!parentNode) return;
+
+    // 根据 slotId 找到父节点对应的 input slot
+    const slotIndex = parentNode.inputs.findIndex((slot) => slot.id === slotId);
+    if (slotIndex === -1) return;
+
+    const outputName = parentNode.inputs[slotIndex].name;
+    this.outputs[0].name = outputName;
+
+    // 父节点 getInputData 已被 nodeMeta wrapper 按 slot.valueMode 分发:
+    //   - label / placeholder → 返回 slot.name / placeholderTemplate
+    //   - 默认               → 返回 wire 真值
+    // 这里只需要再处理"value 模式 + 未连 wire"的 fallback(取 slot.name 作变量名)
+    let value = parentNode.getInputData(slotIndex, true);
+    if (value === undefined || value === null || value === "") {
+      value = outputName;
+    }
+
+    this.setOutputData(0, value);
+
+    this.setDirtyCanvas(true, true);
+  }
+
+  static get title() {
+    return "Input";
+  }
+  static get name() {
+    return this.title;
+  }
+  static get id() {
+    return "a91cf4d0-481b-4eeb-8275-9c4f13a30bcb";
+  }
+  static get treePath() {
+    return "graph";
+  }
+}
+LiteGraph.GraphInput = GraphInput;
+LiteGraph.registerNodeType("graph/input", GraphInput);
+export class GraphOutput extends nodeMeta {
+  constructor() {
+    super();
+    this.outputs.length = 0;
+    this.inputs.length = 0;
+    this.addInput("", "string");
+    this.properties = { slotId: "" };
+  }
+  onExecute() {
+    const slotId = this.properties.slotId;
+    if (!this.graph || !slotId) return;
+
+    const parentNode = this.graph._subgraph_node;
+    if (!parentNode) return;
+
+    // 根据 id 找到父节点对应的 output slot 索引
+    const parentOutputSlotIndex = parentNode.outputs.findIndex(
+      (slot) => slot.id === slotId,
+    );
+    if (parentOutputSlotIndex === -1) return;
+
+    this.inputs[0].name = parentNode.outputs[parentOutputSlotIndex].name;
+
+    // 父节点 setOutputData 已被 nodeMeta wrapper 按 slot.valueMode 自动分发:
+    //   - label / placeholder → 写入物被替换为 slot.name / placeholderTemplate
+    //   - 默认               → 透传 inner wire 值
+    // 父节点子类(如 dbSubgraph)的 onExecute 末尾仍可覆盖此写入值。
+    parentNode.setOutputData(parentOutputSlotIndex, this.getInputData(0));
+
+    this.setDirtyCanvas(true, true);
+  }
+
+  static get title() {
+    return "Output";
+  }
+  static get desc() {
+    return "Output of the graph";
+  }
+  static get id() {
+    return "e4213698-8df1-463a-9cbb-d601e25d584b";
+  }
+  static get treePath() {
+    return "graph";
+  }
+}
+LiteGraph.GraphInput = GraphOutput;
+LiteGraph.registerNodeType("graph/output", GraphOutput);
+// 这些属性是标准节点属性。
+export function createDynamicClass(x, baseClass) {
+  return class extends baseClass {
+    constructor() {
+      super();
+      this.tag = x.tag;
+
+      // vnode的原始数据，根据这数据处理节点的输入输出 与初始化的工作
+      this.nodeRawData = x;
+      this.docs = x.meta?.docs;
+      this.categories = "ui";
+      this.importStr = x.importStr;
+
+      this.parentMustBe = x.parentMustBe;
+
+      // 🔥 如果是 uiNodeMeta 子类，直接在这里初始化 properties
+      if (
+        baseClass === uiNodeMeta ||
+        baseClass.prototype instanceof uiNodeMeta
+      ) {
+        const properties = {
+          props: {},
+          styleClass: {
+            ...(x.defaultStyleClass || {}),
+          },
+          events: {},
+          slots: {},
+          methods: {},
+          computedProps: {},
+          style: "",
+          wrappers: {
+            // v-if 和 v-show（互斥）
+            vIf: {
+              enabled: false,
+              condition: { value: "", isSlot: false },
+            },
+            vShow: {
+              enabled: false,
+              condition: { value: "", isSlot: false },
+            },
+            // Teleport
+            teleport: {
+              enabled: false,
+              to: '"body"',
+              disabled: false,
+              defer: false,
+            },
+            // KeepAlive
+            keepAlive: {
+              enabled: false,
+              include: "",
+              exclude: "",
+              max: null,
+            },
+            // Suspense
+            suspense: {
+              enabled: false,
+              timeout: undefined,
+              suspensible: false,
+              slots: {
+                default: "",
+                fallback: "",
+              },
+              events: {
+                onResolve: "",
+                onPending: "",
+                onFallback: "",
+              },
+            },
+            // Transition
+            transition: {
+              enabled: false,
+              name: '"fade"',
+              mode: "",
+              appear: false,
+              css: true,
+              type: '"transition"',
+              duration: "",
+              enterFromClass: "",
+              enterActiveClass: "",
+              enterToClass: "",
+              leaveFromClass: "",
+              leaveActiveClass: "",
+              leaveToClass: "",
+              appearClass: "",
+              appearActiveClass: "",
+              appearToClass: "",
+              events: {
+                onBeforeEnter: { value: "", isSlot: false },
+                onEnter: { value: "", isSlot: false },
+                onAfterEnter: { value: "", isSlot: false },
+                onEnterCancelled: { value: "", isSlot: false },
+                onBeforeLeave: { value: "", isSlot: false },
+                onLeave: { value: "", isSlot: false },
+                onAfterLeave: { value: "", isSlot: false },
+                onLeaveCancelled: { value: "", isSlot: false },
+                onBeforeAppear: { value: "", isSlot: false },
+                onAppear: { value: "", isSlot: false },
+                onAfterAppear: { value: "", isSlot: false },
+                onAppearCancelled: { value: "", isSlot: false },
+              },
+            },
+            // TransitionGroup
+            transitionGroup: {
+              enabled: false,
+              name: '"list"',
+              tag: '"div"',
+              appear: false,
+              css: true,
+              type: '"transition"',
+              duration: "",
+              moveClass: "",
+              enterFromClass: "",
+              enterActiveClass: "",
+              enterToClass: "",
+              leaveFromClass: "",
+              leaveActiveClass: "",
+              leaveToClass: "",
+              appearClass: "",
+              appearActiveClass: "",
+              appearToClass: "",
+              events: {
+                onBeforeEnter: { value: "", isSlot: false },
+                onEnter: { value: "", isSlot: false },
+                onAfterEnter: { value: "", isSlot: false },
+                onEnterCancelled: { value: "", isSlot: false },
+                onBeforeLeave: { value: "", isSlot: false },
+                onLeave: { value: "", isSlot: false },
+                onAfterLeave: { value: "", isSlot: false },
+                onLeaveCancelled: { value: "", isSlot: false },
+                onBeforeAppear: { value: "", isSlot: false },
+                onAppear: { value: "", isSlot: false },
+                onAfterAppear: { value: "", isSlot: false },
+                onAppearCancelled: { value: "", isSlot: false },
+              },
+            },
+            // Component（动态组件）
+            component: {
+              enabled: false,
+              is: "",
+            },
+          },
+          enhance: {
+            permissionConfig: null, // 权限配置
+          },
+        };
+
+        // 初始化 props
+        if (x.props) {
+          Object.keys(x.props).forEach((propName) => {
+            const propConfig = x.props[propName];
+            properties.props[propName] = {
+              data: "",
+              disable: false,
+              outType: propConfig.outType,
+            };
+          });
+        }
+
+        // 初始化 events
+        if (x.events) {
+          Object.keys(x.events).forEach((eventName) => {
+            properties.events[eventName] = false;
+          });
+        }
+
+        // 初始化 slots
+        if (x.slots) {
+          Object.keys(x.slots).forEach((slotName) => {
+            properties.slots[slotName] = false;
+          });
+        }
+
+        // 初始化 methods
+        if (x.methods) {
+          Object.keys(x.methods).forEach((methodName) => {
+            properties.methods[methodName] = false;
+          });
+        }
+
+        // 初始化 computedProps
+        if (x.computedProps) {
+          Object.keys(x.computedProps).forEach((computedProp) => {
+            properties.computedProps[computedProp] = false;
+          });
+        }
+
+        // 初始化 editorConfig（编辑器专用配置）
+        if (x.meta?.editorConfig) {
+          properties.enhance.editorConfig = {};
+          Object.keys(x.meta.editorConfig).forEach((key) => {
+            const config = x.meta.editorConfig[key];
+            properties.enhance.editorConfig[key] = {
+              value: config.default || "",
+              enabled: true,
+            };
+          });
+        }
+
+        this.properties = properties;
+      }
+    }
+    static get title() {
+      return x.name;
+    }
+    static get name() {
+      // return x.name.startsWith("Q") ? x.name.slice(1) : x.name;
+      return x.name;
+    }
+
+    static get treePath() {
+      return x.treePath || super.treePath;
+    }
+    // 使用传入的稳定 ID，而不是每次调用都生成新的 UUID
+    // 这确保节点类型在页面刷新后保持一致
+    static get id() {
+      return x.id;
+    }
+    // 以下静态属性供"按类读取"的场景使用（如 graphNodesForSearchData 构建搜索/容纳树）。
+    // 注意：tag/parentMustBe 同时也设在实例上(构造函数),但实例读取需先 new；静态可直接从注册类读。
+    static get tag() {
+      return x.tag;
+    }
+    static get parentMustBe() {
+      return x.parentMustBe || [];
+    }
+    // 父→子 正向容纳声明(软,仅用于搜索树推荐/从属显示,不参与硬校验)
+    static get allowChildren() {
+      return x.meta?.allowChildren || [];
+    }
+    // 所属/情境:JSON/配置可显式声明 categories,否则按 treePath 派生
+    static get categories() {
+      return x.categories || categoryOfTreePath(x.treePath || "");
+    }
+  };
+}
