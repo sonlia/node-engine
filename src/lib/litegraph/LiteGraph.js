@@ -362,8 +362,11 @@ class LiteGraphClass {
     if (LGraphNode) {
       if (!(baseClass.prototype instanceof LGraphNode)) {
         // Fallback: mixin for backward compatibility
+        // Use Object.getOwnPropertyNames (not for...in) because ES6 class
+        // methods are non-enumerable — for...in would miss them all.
         // Skip 'constructor' — copying it breaks the class's own constructor.
-        for (const i in LGraphNode.prototype) {
+        const props = Object.getOwnPropertyNames(LGraphNode.prototype);
+        for (const i of props) {
           if (i === "constructor") continue;
           if (baseClass.prototype[i] === undefined) {
             baseClass.prototype[i] = LGraphNode.prototype[i];
@@ -701,10 +704,13 @@ class LiteGraphClass {
 
     // Ensure LGraphNode methods are mixed in for classes that don't
     // extend LGraphNode directly (vuestudio compat: nodeMeta etc.)
-    // Skip 'constructor' — copying it would break the class's own constructor.
+    // Use Object.getOwnPropertyNames (not for...in) because ES6 class
+    // methods are non-enumerable — for...in would miss them all.
+    // Skip 'constructor' — copying it breaks the class's own constructor.
     const LGraphNode = LiteGraphClass._LGraphNode;
     if (LGraphNode && !(baseClass.prototype instanceof LGraphNode)) {
-      for (const i in LGraphNode.prototype) {
+      const props = Object.getOwnPropertyNames(LGraphNode.prototype);
+      for (const i of props) {
         if (i === "constructor") continue;
         if (baseClass.prototype[i] === undefined) {
           baseClass.prototype[i] = LGraphNode.prototype[i];
@@ -994,10 +1000,12 @@ class LiteGraphClass {
     }
     // Copy prototype properties (including getters/setters) so subclassing
     // via `LiteGraph.extendClass(Sub, LGraphNode)` actually inherits methods.
+    // Use Object.getOwnPropertyNames (not for...in) because ES6 class
+    // methods are non-enumerable.
     if (origin.prototype) {
-      for (const i in origin.prototype) {
-        if (!Object.prototype.hasOwnProperty.call(origin.prototype, i))
-          continue;
+      const propNames = Object.getOwnPropertyNames(origin.prototype);
+      for (const i of propNames) {
+        if (i === "constructor") continue;
         if (Object.prototype.hasOwnProperty.call(target.prototype, i))
           continue;
         const getter = origin.prototype.__lookupGetter__(i);

@@ -78,7 +78,8 @@ LiteGraph.getParameterNames = getParameterNames;
 if (LiteGraph._pendingRegistrations) {
   for (const baseClass of LiteGraph._pendingRegistrations) {
     if (!(baseClass.prototype instanceof LGraphNode)) {
-      for (const i in LGraphNode.prototype) {
+      const props = Object.getOwnPropertyNames(LGraphNode.prototype);
+      for (const i of props) {
         if (i === "constructor") continue;
         if (baseClass.prototype[i] === undefined) {
           baseClass.prototype[i] = LGraphNode.prototype[i];
