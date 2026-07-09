@@ -117,3 +117,18 @@ export {
   pointerListenerRemove,
   _setLiteGraphRef,
 } from "./utils.js";
+
+// Default export — bundles all major classes for convenience.
+// Allows: import LiteGraph from '@sonlia/node-engine'
+// Also:   import { LGraph, LiteGraph } from '@sonlia/node-engine' (named)
+export default {
+  LiteGraph,
+  LiteGraphClass,
+  LGraphNode,
+  LGraph,
+  LLink,
+  LGraphGroup,
+  DragAndScale,
+  LGraphCanvas,
+  WorkerScheduler,
+};
